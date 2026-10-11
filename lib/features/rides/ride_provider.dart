@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/network/api_constants.dart';
 import '../../core/network/api_service.dart';
 import 'models/ride_request_model.dart';
+import 'models/ride_route_model.dart';
 
 enum RideStep { none, accepted, arrived, otpEntered, started, completed, cancelled }
 
@@ -15,6 +16,7 @@ class RideState {
   final bool isRideLoading;
   final List<RideRequestModel> pendingRequests;
   final RideRequestModel? activeRide;
+  final RideRouteModel? activeRoute;
   final RideStep rideStep;
   final String? errorMessage;
 
@@ -25,6 +27,7 @@ class RideState {
     this.isRideLoading = false,
     this.pendingRequests = const [],
     this.activeRide,
+    this.activeRoute,
     this.rideStep = RideStep.none,
     this.errorMessage,
   });
@@ -36,7 +39,9 @@ class RideState {
     bool? isRideLoading,
     List<RideRequestModel>? pendingRequests,
     RideRequestModel? activeRide,
+    RideRouteModel? activeRoute,
     bool clearActiveRide = false,
+    bool clearActiveRoute = false,
     RideStep? rideStep,
     String? errorMessage,
   }) {
@@ -47,6 +52,7 @@ class RideState {
       isRideLoading: isRideLoading ?? this.isRideLoading,
       pendingRequests: pendingRequests ?? this.pendingRequests,
       activeRide: clearActiveRide ? null : (activeRide ?? this.activeRide),
+      activeRoute: (clearActiveRide || clearActiveRoute) ? null : (activeRoute ?? this.activeRoute),
       rideStep: rideStep ?? this.rideStep,
       errorMessage: errorMessage,
     );
@@ -57,6 +63,8 @@ class RideNotifier extends StateNotifier<RideState> {
   final ApiService _apiService;
   Timer? _pollingTimer;
   Timer? _locationTimer;
+  double? currentLat;
+  double? currentLng;
 
   RideNotifier({ApiService? apiService}) : _apiService = apiService ?? ApiService(), super(RideState()) {
     restoreDutyStatus();
@@ -66,6 +74,11 @@ class RideNotifier extends StateNotifier<RideState> {
   void dispose() {
     _stopTimers();
     super.dispose();
+  }
+
+  void updateDriverCoordinates(double lat, double lng) {
+    currentLat = lat;
+    currentLng = lng;
   }
 
   /// Restores online duty status from SharedPreferences on app restart
@@ -78,7 +91,9 @@ class RideNotifier extends StateNotifier<RideState> {
         state = state.copyWith(isOnline: true);
         _startTimers();
         fetchPendingRequests();
-        updateLocation(20.2961, 85.8245);
+        if (currentLat != null && currentLng != null) {
+          updateLocation(currentLat!, currentLng!);
+        }
       }
     } catch (_) {}
   }
@@ -102,8 +117,8 @@ class RideNotifier extends StateNotifier<RideState> {
 
     // Send live GPS location periodically every 10 seconds while online
     _locationTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (state.isOnline) {
-        updateLocation(20.2961, 85.8245);
+      if (state.isOnline && currentLat != null && currentLng != null) {
+        updateLocation(currentLat!, currentLng!);
       }
     });
   }
@@ -122,7 +137,9 @@ class RideNotifier extends StateNotifier<RideState> {
     state = state.copyWith(isOnline: true, batteryLevel: battery, isDutyLoading: false);
     _startTimers();
     fetchPendingRequests();
-    updateLocation(20.2961, 85.8245);
+    if (currentLat != null && currentLng != null) {
+      updateLocation(currentLat!, currentLng!);
+    }
     return true;
   }
 
@@ -138,7 +155,14 @@ class RideNotifier extends StateNotifier<RideState> {
     } catch (_) {}
 
     _stopTimers();
-    state = state.copyWith(isOnline: false, isDutyLoading: false, pendingRequests: [], clearActiveRide: true, rideStep: RideStep.none);
+    state = state.copyWith(
+      isOnline: false,
+      isDutyLoading: false,
+      pendingRequests: [],
+      clearActiveRide: true,
+      clearActiveRoute: true,
+      rideStep: RideStep.none,
+    );
     return true;
   }
 
@@ -147,6 +171,12 @@ class RideNotifier extends StateNotifier<RideState> {
     if (!state.isOnline) return false;
 
     final response = await _apiService.post(ApiConstants.updateLocation, data: {'lat': lat, 'lng': lng});
+
+    // Auto refresh route polyline when driver moves with an active ride
+    if (state.activeRide != null) {
+      fetchRideRoute(state.activeRide!.id, lat: lat, lng: lng);
+    }
+
     return response.isSuccess;
   }
 
@@ -167,7 +197,20 @@ class RideNotifier extends StateNotifier<RideState> {
     if (response.isSuccess && response.data != null) {
       try {
         final raw = response.data is String ? jsonDecode(response.data) : response.data;
-        final dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+        var dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+
+        // Extract list if wrapped in a map key (e.g., {"requests": [...]})
+        if (dataPayload is Map) {
+          if (dataPayload['requests'] is List) {
+            dataPayload = dataPayload['requests'];
+          } else if (dataPayload['rideRequests'] is List) {
+            dataPayload = dataPayload['rideRequests'];
+          } else if (dataPayload['rides'] is List) {
+            dataPayload = dataPayload['rides'];
+          } else if (dataPayload['pending'] is List) {
+            dataPayload = dataPayload['pending'];
+          }
+        }
 
         List<RideRequestModel> requests = [];
         if (dataPayload is List) {
@@ -185,27 +228,57 @@ class RideNotifier extends StateNotifier<RideState> {
     }
   }
 
-  /// 6. Accept Ride (POST /driver/riderequests/{rideId}/accept)
-  Future<bool> acceptRide(String rideId) async {
+  /// 6. Accept Ride (POST /driver/riderequests/{rideId}/accept or /driver/ride-requests/{rideId}/accept)
+  Future<bool> acceptRide(String rideId, {double? driverLat, double? driverLng}) async {
     state = state.copyWith(isRideLoading: true, errorMessage: null);
 
-    final response = await _apiService.post(ApiConstants.acceptRideRequest(rideId));
+    final existingReq = state.pendingRequests.firstWhere(
+      (r) => r.id == rideId,
+      orElse: () => state.activeRide ?? RideRequestModel(id: rideId, status: 'accepted'),
+    );
+
+    var response = await _apiService.post(ApiConstants.acceptRideRequest(rideId));
+
+    // Endpoint fallback if primary accepts hyphenated route
+    if (!response.isSuccess) {
+      response = await _apiService.post('/driver/ride-requests/$rideId/accept');
+    }
 
     if (response.isSuccess) {
-      final existingReq = state.pendingRequests.firstWhere(
-        (r) => r.id == rideId,
-        orElse: () => RideRequestModel(id: rideId, status: 'accepted'),
-      );
+      RideRequestModel? acceptedRide;
+      RideRouteModel? acceptedRoute;
+
+      if (response.data != null) {
+        try {
+          final raw = response.data is String ? jsonDecode(response.data) : response.data;
+          final dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+
+          if (dataPayload is Map<String, dynamic>) {
+            acceptedRide = RideRequestModel.tryParse(dataPayload);
+            if (dataPayload['route'] is Map) {
+              acceptedRoute = RideRouteModel.fromJson({'data': dataPayload['route'], 'rideId': rideId});
+            }
+          }
+        } catch (_) {}
+      }
+
+      final finalActive = acceptedRide != null
+          ? existingReq.mergeWith(acceptedRide).copyWith(status: 'accepted')
+          : existingReq.copyWith(status: 'accepted');
 
       state = state.copyWith(
         isRideLoading: false,
-        activeRide: existingReq.copyWith(status: 'accepted'),
+        activeRide: finalActive,
+        activeRoute: acceptedRoute ?? state.activeRoute,
         rideStep: RideStep.accepted,
         pendingRequests: [],
       );
 
-      // Fetch full ride details from server
-      await fetchRideDetails(rideId);
+      // Fallback fetch route if not included in accept response
+      if (acceptedRoute == null && driverLat != null && driverLng != null) {
+        await fetchRideRoute(rideId, lat: driverLat, lng: driverLng);
+      }
+
       return true;
     } else {
       state = state.copyWith(isRideLoading: false, errorMessage: response.errorMessage ?? 'Failed to accept ride request');
@@ -220,14 +293,70 @@ class RideNotifier extends StateNotifier<RideState> {
     if (response.isSuccess && response.data != null) {
       try {
         final raw = response.data is String ? jsonDecode(response.data) : response.data;
-        final dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+        var dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+
+        if (dataPayload is Map) {
+          if (dataPayload['ride'] is Map) {
+            dataPayload = dataPayload['ride'];
+          } else if (dataPayload['rideDetails'] is Map) {
+            dataPayload = dataPayload['rideDetails'];
+          } else if (dataPayload['request'] is Map) {
+            dataPayload = dataPayload['request'];
+          }
+        }
 
         if (dataPayload is Map<String, dynamic>) {
-          final updatedRide = RideRequestModel.fromJson(dataPayload);
-          state = state.copyWith(activeRide: updatedRide);
+          final fetchedRide = RideRequestModel.fromJson(dataPayload);
+          final mergedRide = state.activeRide != null
+              ? state.activeRide!.mergeWith(fetchedRide)
+              : fetchedRide;
+          state = state.copyWith(activeRide: mergedRide);
         }
       } catch (_) {}
     }
+  }
+
+  /// 7b. Get Ride Route (GET /driver/rides/{rideId}/route?lat={lat}&lng={lng})
+  Future<RideRouteModel?> fetchRideRoute(String rideId, {required double lat, required double lng}) async {
+    final response = await _apiService.get(ApiConstants.getRideRoute(rideId, lat, lng));
+
+    if (response.isSuccess && response.data != null) {
+      try {
+        final raw = response.data is String ? jsonDecode(response.data) : response.data;
+        final dataPayload = (raw is Map) ? (raw['data'] ?? raw['result'] ?? raw) : raw;
+
+        if (dataPayload is Map<String, dynamic>) {
+          final routeModel = RideRouteModel.fromJson(dataPayload);
+          state = state.copyWith(activeRoute: routeModel);
+
+          // Backfill missing fields in activeRide from routeModel if needed
+          if (state.activeRide != null) {
+            var active = state.activeRide!;
+            bool updated = false;
+
+            if (active.riderName.isEmpty && routeModel.riderName.isNotEmpty) {
+              active = active.copyWith(riderName: routeModel.riderName, riderPhone: routeModel.riderPhone);
+              updated = true;
+            }
+            if (active.pickupAddress.isEmpty && routeModel.target == 'pickup' && routeModel.targetAddress.isNotEmpty) {
+              active = active.copyWith(pickupAddress: routeModel.targetAddress, pickupLat: routeModel.targetLat, pickupLng: routeModel.targetLng);
+              updated = true;
+            }
+            if (active.dropAddress.isEmpty && routeModel.target == 'dropoff' && routeModel.targetAddress.isNotEmpty) {
+              active = active.copyWith(dropAddress: routeModel.targetAddress, dropLat: routeModel.targetLat, dropLng: routeModel.targetLng);
+              updated = true;
+            }
+
+            if (updated) {
+              state = state.copyWith(activeRide: active);
+            }
+          }
+
+          return routeModel;
+        }
+      } catch (_) {}
+    }
+    return null;
   }
 
   /// 8. Mark Arrived at Pickup (POST /driver/rides/{rideId}/arrived)
@@ -250,7 +379,7 @@ class RideNotifier extends StateNotifier<RideState> {
   }
 
   /// 9. Start Ride with OTP (POST /driver/rides/{rideId}/start)
-  Future<bool> startRide(String rideId, String otp) async {
+  Future<bool> startRide(String rideId, String otp, {double? driverLat, double? driverLng}) async {
     if (otp.length < 4) {
       state = state.copyWith(errorMessage: 'Please enter valid 4-digit OTP');
       return false;
@@ -266,6 +395,12 @@ class RideNotifier extends StateNotifier<RideState> {
         rideStep: RideStep.started,
         activeRide: state.activeRide?.copyWith(status: 'started'),
       );
+
+      // Fetch route polyline to dropoff location
+      if (driverLat != null && driverLng != null) {
+        await fetchRideRoute(rideId, lat: driverLat, lng: driverLng);
+      }
+
       return true;
     } else {
       state = state.copyWith(isRideLoading: false, errorMessage: response.errorMessage ?? 'Invalid OTP entered. Please try again.');
@@ -289,7 +424,12 @@ class RideNotifier extends StateNotifier<RideState> {
 
     await _apiService.post(ApiConstants.cancelRide(rideId), data: {'reason': reason ?? 'Driver cancelled'});
 
-    state = state.copyWith(isRideLoading: false, clearActiveRide: true, rideStep: RideStep.none);
+    state = state.copyWith(
+      isRideLoading: false,
+      clearActiveRide: true,
+      clearActiveRoute: true,
+      rideStep: RideStep.none,
+    );
     return true;
   }
 
@@ -300,7 +440,12 @@ class RideNotifier extends StateNotifier<RideState> {
     final response = await _apiService.post(ApiConstants.completeRide(rideId));
 
     if (response.isSuccess) {
-      state = state.copyWith(isRideLoading: false, rideStep: RideStep.completed, clearActiveRide: true);
+      state = state.copyWith(
+        isRideLoading: false,
+        rideStep: RideStep.completed,
+        clearActiveRide: true,
+        clearActiveRoute: true,
+      );
       return true;
     } else {
       state = state.copyWith(isRideLoading: false, errorMessage: response.errorMessage ?? 'Failed to complete ride');
@@ -310,7 +455,12 @@ class RideNotifier extends StateNotifier<RideState> {
 
   /// Complete Ride local reset
   void completeActiveRide() {
-    state = state.copyWith(isRideLoading: false, clearActiveRide: true, rideStep: RideStep.none);
+    state = state.copyWith(
+      isRideLoading: false,
+      clearActiveRide: true,
+      clearActiveRoute: true,
+      rideStep: RideStep.none,
+    );
   }
 
   /// Get Waiting Charges / Time (GET /driver/rides/{rideId}/waiting)
@@ -323,20 +473,14 @@ class RideNotifier extends StateNotifier<RideState> {
   Future<bool> rateRider(String rideId, {required int rating, String? comment}) async {
     final response = await _apiService.post(
       ApiConstants.rateRider(rideId),
-      data: {
-        'rating': rating,
-        if (comment != null) 'comment': comment,
-      },
+      data: {'rating': rating, if (comment != null) 'comment': comment},
     );
     return response.isSuccess;
   }
 
   /// Request Payout (POST /driver/payout-request)
   Future<bool> requestPayout({required double amount}) async {
-    final response = await _apiService.post(
-      ApiConstants.payoutRequest,
-      data: {'amount': amount},
-    );
+    final response = await _apiService.post(ApiConstants.payoutRequest, data: {'amount': amount});
     return response.isSuccess;
   }
 }

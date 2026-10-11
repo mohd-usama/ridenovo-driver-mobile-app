@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart' as loc;
@@ -24,6 +23,8 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
   static const LatLng _defaultPosition = LatLng(20.2961, 85.8245); // Bhubaneswar fallback
   LatLng _currentPosition = LatLng(20.2961, 85.8245);
   Set<Marker> _markers = {};
+  Set<Polyline> _polylines = {};
+  String? _lastRoutedRideId;
   bool _isLoadingLocation = true;
 
   @override
@@ -104,6 +105,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         _mapController?.animateCamera(CameraUpdate.newLatLngZoom(latLng, 16.0));
 
         // Broadcast location to ride provider
+        ref.read(rideProvider.notifier).updateDriverCoordinates(latLng.latitude, latLng.longitude);
         ref.read(rideProvider.notifier).updateLocation(latLng.latitude, latLng.longitude);
       } else {
         setState(() => _isLoadingLocation = false);
@@ -135,7 +137,11 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
       final success = await rideNotifier.goOnline(battery: 85);
       if (mounted) {
         if (success) {
-          AppFlushbar.success(context, title: 'Duty Status: ONLINE 🟢', message: 'Searching for nearby rides & broadcasting live location...');
+          AppFlushbar.success(
+            context,
+            title: 'Duty Status: ONLINE 🟢',
+            message: 'Searching for nearby rides & broadcasting live location...',
+          );
         } else {
           AppFlushbar.info(context, title: 'Duty Status: ONLINE', message: 'Switched online successfully.');
         }
@@ -143,7 +149,11 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     } else {
       await rideNotifier.goOffline();
       if (mounted) {
-        AppFlushbar.warning(context, title: 'Duty Status: OFFLINE 🔴', message: 'You are now offline and won\'t receive new ride requests.');
+        AppFlushbar.warning(
+          context,
+          title: 'Duty Status: OFFLINE 🔴',
+          message: 'You are now offline and won\'t receive new ride requests.',
+        );
       }
     }
   }
@@ -172,10 +182,110 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     );
   }
 
+  void _updateRouteOnMap(RideState rideState) {
+    final route = rideState.activeRoute;
+    final activeRide = rideState.activeRide;
+
+    if (activeRide == null || route == null || route.routeCoordinates.isEmpty) {
+      if (_polylines.isNotEmpty || _lastRoutedRideId != null) {
+        setState(() {
+          _polylines = {};
+          _lastRoutedRideId = null;
+          _markers = {
+            Marker(
+              markerId: const MarkerId('driver_location'),
+              position: _currentPosition,
+              infoWindow: const InfoWindow(title: 'Your Current Location', snippet: 'Captain Online & Ready'),
+              icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+            ),
+          };
+        });
+
+        // Re-center map to driver's current position when ride completes or cancels
+        _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_currentPosition, 16.0));
+      }
+      return;
+    }
+
+    final coords = route.routeCoordinates;
+    final isPickup = route.target == 'pickup';
+
+    final LatLng targetLatLng = (route.targetLat != 0.0 && route.targetLng != 0.0)
+        ? LatLng(route.targetLat, route.targetLng)
+        : (isPickup ? LatLng(activeRide.pickupLat, activeRide.pickupLng) : LatLng(activeRide.dropLat, activeRide.dropLng));
+
+    final Set<Marker> updatedMarkers = {
+      Marker(
+        markerId: const MarkerId('driver_location'),
+        position: _currentPosition,
+        infoWindow: const InfoWindow(title: 'Driver (You)'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+      ),
+      if (targetLatLng.latitude != 0.0 && targetLatLng.longitude != 0.0)
+        Marker(
+          markerId: const MarkerId('target_destination'),
+          position: targetLatLng,
+          infoWindow: InfoWindow(
+            title: isPickup ? 'Pickup Location 🟢' : 'Dropoff Location 🔴',
+            snippet: route.targetAddress.isNotEmpty ? route.targetAddress : (isPickup ? activeRide.pickupAddress : activeRide.dropAddress),
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(isPickup ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueRed),
+        ),
+    };
+
+    final Set<Polyline> updatedPolylines = {
+      Polyline(
+        polylineId: const PolylineId('ride_navigation_route'),
+        points: coords,
+        color: const Color(0xFF2196F3),
+        width: 6,
+        jointType: JointType.round,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+      ),
+    };
+
+    setState(() {
+      _markers = updatedMarkers;
+      _polylines = updatedPolylines;
+    });
+
+    if (_mapController != null && coords.isNotEmpty && _lastRoutedRideId != route.rideId) {
+      _lastRoutedRideId = route.rideId;
+      _fitMapBounds(coords);
+    }
+  }
+
+  void _fitMapBounds(List<LatLng> points) {
+    if (points.isEmpty || _mapController == null) return;
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (var p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(minLat, minLng), northeast: LatLng(maxLat, maxLng)), 80.0),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
     final rideState = ref.watch(rideProvider);
+
+    ref.listen<RideState>(rideProvider, (previous, next) {
+      if (previous?.activeRoute != next.activeRoute || previous?.activeRide != next.activeRide) {
+        _updateRouteOnMap(next);
+      }
+    });
 
     final isOnline = rideState.isOnline;
     final activeRide = rideState.activeRide;
@@ -188,11 +298,15 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
           GoogleMap(
             initialCameraPosition: CameraPosition(target: _currentPosition, zoom: 16.0),
             markers: _markers,
+            polylines: _polylines,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             onMapCreated: (controller) {
               _mapController = controller;
+              if (rideState.activeRoute != null) {
+                _updateRouteOnMap(rideState);
+              }
             },
           ),
 
@@ -257,7 +371,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
 
           // 3. Real Incoming Ride Request Card (From GET /driver/ride-requests)
           if (isOnline && activeRide == null && pendingRequests.isNotEmpty)
-            Positioned(left: 16, right: 16, bottom: 200, child: _buildIncomingRideCard(pendingRequests.first)),
+            Positioned(left: 16, right: 16, bottom: 120, child: _buildIncomingRideCard(pendingRequests.first)),
 
           // 4. Active Ride Execution Flow Sheet (Step-Based State Machine)
           if (activeRide != null)
@@ -271,9 +385,13 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
   }
 
   Widget _buildIncomingRideCard(RideRequestModel req) {
+    final rideNotifier = ref.read(rideProvider.notifier);
     final distanceText = req.distance.isNotEmpty ? req.distance : 'Nearby';
+    final durationText = req.duration.isNotEmpty ? ' • ${req.duration}' : '';
     final pickupText = req.pickupAddress.isNotEmpty ? req.pickupAddress : 'Pickup Location';
     final dropText = req.dropAddress.isNotEmpty ? req.dropAddress : 'Drop Location';
+    final riderName = req.riderName.isNotEmpty ? req.riderName : 'Customer';
+    final vehicleTypeText = req.vehicleType.isNotEmpty ? ' • ${req.vehicleType}' : '';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -283,6 +401,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 16, offset: const Offset(0, 8))],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -292,12 +411,12 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
                 child: Text(
-                  'NEW RIDE REQUEST • $distanceText',
+                  'NEW RIDE REQUEST • $distanceText$durationText$vehicleTypeText',
                   style: const TextStyle(color: AppColors.primaryDark, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
               ),
               Text(
-                '₹ ${req.fare.toStringAsFixed(2)}',
+                '₹ ${req.fare.toStringAsFixed(0)}',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.success),
               ),
             ],
@@ -305,33 +424,106 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
           const SizedBox(height: 12),
           Row(
             children: [
-              const Icon(Icons.trip_origin, color: Colors.green, size: 18),
+              const CircleAvatar(
+                radius: 14,
+                backgroundColor: AppColors.primary,
+                child: Icon(Icons.person, size: 16, color: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                riderName,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+              ),
+              if (req.paymentMethod.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(4)),
+                  child: Text(
+                    req.paymentMethod,
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.grey.shade800),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.trip_origin, color: Colors.green, size: 16),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Pickup: $pickupText',
+                  pickupText,
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.location_on, color: Colors.red, size: 18),
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.location_on, color: Colors.red, size: 16),
+              ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('Drop: $dropText', style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                child: Text(
+                  dropText,
+                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 48), backgroundColor: AppColors.success),
-            onPressed: () {
-              ref.read(rideProvider.notifier).acceptRide(req.id);
-            },
-            child: const Text('ACCEPT RIDE'),
+          Row(
+            children: [
+              Expanded(
+                flex: 1,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                    side: const BorderSide(color: AppColors.error),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    rideNotifier.rejectRide(req.id);
+                  },
+                  child: const Text(
+                    'REJECT',
+                    style: TextStyle(color: AppColors.error, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                    backgroundColor: AppColors.success,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    rideNotifier.acceptRide(req.id, driverLat: _currentPosition.latitude, driverLng: _currentPosition.longitude);
+                  },
+                  child: const Text(
+                    'ACCEPT RIDE',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -340,10 +532,22 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
 
   Widget _buildActiveRideExecutionSheet(RideRequestModel ride, RideState state) {
     final rideNotifier = ref.read(rideProvider.notifier);
-    final riderName = ride.riderName.isNotEmpty ? ride.riderName : 'Rider Customer';
-    final riderPhone = ride.riderPhone.isNotEmpty ? ride.riderPhone : 'Available in app';
-    final pickupText = ride.pickupAddress.isNotEmpty ? ride.pickupAddress : 'Pickup Location';
-    final dropText = ride.dropAddress.isNotEmpty ? ride.dropAddress : 'Drop Destination';
+    final route = state.activeRoute;
+
+    final riderName = ride.riderName.isNotEmpty
+        ? ride.riderName
+        : (route != null && route.riderName.isNotEmpty ? route.riderName : 'Customer');
+    final riderPhone = ride.riderPhone.isNotEmpty
+        ? ride.riderPhone
+        : (route != null && route.riderPhone.isNotEmpty ? route.riderPhone : 'Available in app');
+
+    final pickupText = ride.pickupAddress.isNotEmpty
+        ? ride.pickupAddress
+        : (route != null && route.target == 'pickup' && route.targetAddress.isNotEmpty ? route.targetAddress : 'Pickup Location');
+
+    final dropText = ride.dropAddress.isNotEmpty
+        ? ride.dropAddress
+        : (route != null && route.target == 'dropoff' && route.targetAddress.isNotEmpty ? route.targetAddress : 'Drop Destination');
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -452,7 +656,12 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
               onPressed: state.isRideLoading
                   ? null
                   : () async {
-                      final success = await rideNotifier.startRide(ride.id, _otpController.text.trim());
+                      final success = await rideNotifier.startRide(
+                        ride.id,
+                        _otpController.text.trim(),
+                        driverLat: _currentPosition.latitude,
+                        driverLng: _currentPosition.longitude,
+                      );
                       if (mounted && success) {
                         _otpController.clear();
                         AppFlushbar.success(context, title: 'Ride Started! 🚖', message: 'Trip is now in progress.');

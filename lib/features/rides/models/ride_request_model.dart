@@ -11,7 +11,9 @@ class RideRequestModel {
   final String duration;
   final String riderName;
   final String riderPhone;
-  final String status; // requested, accepted, arrived, started, completed, cancelled
+  final String vehicleType;
+  final String paymentMethod;
+  final String status; // searching, requested, accepted, arrived, started, completed, cancelled
   final String? otp;
 
   RideRequestModel({
@@ -27,25 +29,46 @@ class RideRequestModel {
     this.duration = '',
     this.riderName = '',
     this.riderPhone = '',
+    this.vehicleType = '',
+    this.paymentMethod = 'CASH',
     this.status = 'requested',
     this.otp,
   });
 
   static RideRequestModel? tryParse(dynamic json) {
     if (json == null) return null;
-    final map = (json is Map) ? (json['data'] ?? json['result'] ?? json) : null;
-    if (map == null || map is! Map<String, dynamic>) return null;
+    var map = (json is Map) ? (json['data'] ?? json['result'] ?? json) : null;
+    if (map == null || map is! Map) return null;
 
-    final id = map['id']?.toString() ?? map['rideId']?.toString() ?? map['ride_id']?.toString();
+    final mapDynamic = Map<String, dynamic>.from(map);
+
+    // If map itself contains a nested list under 'requests', 'rideRequests', or 'rides'
+    if (mapDynamic.containsKey('requests') && mapDynamic['requests'] is List && (mapDynamic['requests'] as List).isNotEmpty) {
+      return RideRequestModel.tryParse(mapDynamic['requests'][0]);
+    }
+
+    final id = mapDynamic['id']?.toString() ?? mapDynamic['rideId']?.toString() ?? mapDynamic['ride_id']?.toString();
     if (id == null || id.isEmpty) {
       return null;
     }
 
-    return RideRequestModel.fromJson(map);
+    return RideRequestModel.fromJson(mapDynamic);
   }
 
   factory RideRequestModel.fromJson(Map<String, dynamic> json) {
-    final map = (json['data'] is Map<String, dynamic>) ? json['data'] : ((json['result'] is Map<String, dynamic>) ? json['result'] : json);
+    var rawMap = (json['data'] is Map<String, dynamic>) ? json['data'] : ((json['result'] is Map<String, dynamic>) ? json['result'] : json);
+
+    if (rawMap is Map) {
+      if (rawMap['ride'] is Map) {
+        rawMap = rawMap['ride'];
+      } else if (rawMap['rideDetails'] is Map) {
+        rawMap = rawMap['rideDetails'];
+      } else if (rawMap['request'] is Map) {
+        rawMap = rawMap['request'];
+      }
+    }
+
+    final map = Map<String, dynamic>.from(rawMap is Map ? rawMap : json);
 
     String id = map['id']?.toString() ?? map['rideId']?.toString() ?? map['ride_id']?.toString() ?? '';
 
@@ -58,9 +81,9 @@ class RideRequestModel {
       pLat = double.tryParse(map['pickup']['lat']?.toString() ?? '') ?? 0.0;
       pLng = double.tryParse(map['pickup']['lng']?.toString() ?? '') ?? 0.0;
     } else {
-      pAddress = map['pickupLocation']?.toString() ?? map['pickup_address']?.toString() ?? map['pickupAddress']?.toString() ?? '';
-      pLat = double.tryParse(map['pickupLat']?.toString() ?? map['pickup_lat']?.toString() ?? '') ?? 0.0;
-      pLng = double.tryParse(map['pickupLng']?.toString() ?? map['pickup_lng']?.toString() ?? '') ?? 0.0;
+      pAddress = map['pickup'] is String ? map['pickup'] : (map['pickupLocation']?.toString() ?? map['pickup_address']?.toString() ?? map['pickupAddress']?.toString() ?? '');
+      pLat = double.tryParse(map['pickup_lat']?.toString() ?? map['pickupLat']?.toString() ?? (map['pickupLocation'] is Map ? map['pickupLocation']['lat']?.toString() : '') ?? '') ?? 0.0;
+      pLng = double.tryParse(map['pickup_lng']?.toString() ?? map['pickupLng']?.toString() ?? (map['pickupLocation'] is Map ? map['pickupLocation']['lng']?.toString() : '') ?? '') ?? 0.0;
     }
 
     // Extract drop
@@ -72,26 +95,57 @@ class RideRequestModel {
       dLat = double.tryParse(map['drop']['lat']?.toString() ?? '') ?? 0.0;
       dLng = double.tryParse(map['drop']['lng']?.toString() ?? '') ?? 0.0;
     } else {
-      dAddress = map['dropLocation']?.toString() ?? map['drop_address']?.toString() ?? map['dropAddress']?.toString() ?? '';
-      dLat = double.tryParse(map['dropLat']?.toString() ?? map['drop_lat']?.toString() ?? '') ?? 0.0;
-      dLng = double.tryParse(map['dropLng']?.toString() ?? map['drop_lng']?.toString() ?? '') ?? 0.0;
+      dAddress = map['drop'] is String ? map['drop'] : (map['dropLocation']?.toString() ?? map['dropoff_address']?.toString() ?? map['dropAddress']?.toString() ?? '');
+      dLat = double.tryParse(map['dropoff_lat']?.toString() ?? map['dropLat']?.toString() ?? (map['dropoffLocation'] is Map ? map['dropoffLocation']['lat']?.toString() : '') ?? '') ?? 0.0;
+      dLng = double.tryParse(map['dropoff_lng']?.toString() ?? map['dropLng']?.toString() ?? (map['dropoffLocation'] is Map ? map['dropoffLocation']['lng']?.toString() : '') ?? '') ?? 0.0;
     }
 
     // Extract rider info
     String rName = '';
     String rPhone = '';
     if (map['rider'] is Map) {
-      rName = map['rider']['name']?.toString() ?? map['rider']['fullName']?.toString() ?? map['rider']['full_name']?.toString() ?? '';
-      rPhone =
-          map['rider']['phone']?.toString() ?? map['rider']['mobileNumber']?.toString() ?? map['rider']['mobile_number']?.toString() ?? '';
+      rName = map['rider']['fullName']?.toString() ?? map['rider']['name']?.toString() ?? map['rider']['full_name']?.toString() ?? '';
+      rPhone = map['rider']['phone']?.toString() ?? map['rider']['mobileNumber']?.toString() ?? map['rider']['mobile_number']?.toString() ?? '';
+    } else if (map['driver'] is Map && map['rider'] == null) {
+      // Sometimes driver object is present
     } else if (map['user'] is Map) {
-      rName = map['user']['name']?.toString() ?? map['user']['fullName']?.toString() ?? map['user']['full_name']?.toString() ?? '';
-      rPhone =
-          map['user']['phone']?.toString() ?? map['user']['mobileNumber']?.toString() ?? map['user']['mobile_number']?.toString() ?? '';
+      rName = map['user']['fullName']?.toString() ?? map['user']['name']?.toString() ?? map['user']['full_name']?.toString() ?? '';
+      rPhone = map['user']['phone']?.toString() ?? map['user']['mobileNumber']?.toString() ?? map['user']['mobile_number']?.toString() ?? '';
     } else {
       rName = map['riderName']?.toString() ?? map['rider_name']?.toString() ?? map['userName']?.toString() ?? '';
       rPhone = map['riderPhone']?.toString() ?? map['rider_phone']?.toString() ?? map['userPhone']?.toString() ?? '';
     }
+
+    // Distance formatting
+    String dist = map['distance']?.toString() ?? map['estimatedDistance']?.toString() ?? map['estimated_distance']?.toString() ?? '';
+    if (dist.isEmpty && map['distance_km'] != null) {
+      dist = '${map['distance_km']} km';
+    } else if (dist.isEmpty && map['distanceKm'] != null) {
+      dist = '${map['distanceKm']} km';
+    }
+
+    // Duration formatting
+    String dur = map['duration']?.toString() ?? map['estimatedDuration']?.toString() ?? map['estimated_duration']?.toString() ?? '';
+    if (dur.isEmpty && map['duration_minutes'] != null) {
+      dur = '${map['duration_minutes']} mins';
+    } else if (dur.isEmpty && map['durationMins'] != null) {
+      dur = '${map['durationMins']} mins';
+    }
+
+    String vType = map['vehicleType']?.toString() ?? map['vehicle_type']?.toString() ?? '';
+    String pMethod = map['paymentMethod']?.toString() ?? map['payment_method']?.toString() ?? 'CASH';
+
+    // Fare Amount Extraction
+    double fareAmt = double.tryParse(map['fare']?.toString() ??
+            map['final_fare']?.toString() ??
+            map['estimatedFare']?.toString() ??
+            map['estimated_fare']?.toString() ??
+            map['amount']?.toString() ??
+            map['totalFare']?.toString() ??
+            '0.0') ??
+        0.0;
+
+    String? otpVal = map['otp']?.toString() ?? map['otp_code']?.toString();
 
     return RideRequestModel(
       id: id,
@@ -101,14 +155,37 @@ class RideRequestModel {
       dropAddress: dAddress,
       dropLat: dLat,
       dropLng: dLng,
-      fare:
-          double.tryParse(map['fare']?.toString() ?? map['estimatedFare']?.toString() ?? map['estimated_fare']?.toString() ?? '0.0') ?? 0.0,
-      distance: map['distance']?.toString() ?? map['estimatedDistance']?.toString() ?? map['estimated_distance']?.toString() ?? '',
-      duration: map['duration']?.toString() ?? map['estimatedDuration']?.toString() ?? map['estimated_duration']?.toString() ?? '',
+      fare: fareAmt,
+      distance: dist,
+      duration: dur,
       riderName: rName,
       riderPhone: rPhone,
+      vehicleType: vType,
+      paymentMethod: pMethod,
       status: map['status']?.toString() ?? 'requested',
-      otp: map['otp']?.toString(),
+      otp: otpVal,
+    );
+  }
+
+  /// Merges current request model with another, preserving non-empty existing data
+  RideRequestModel mergeWith(RideRequestModel other) {
+    return RideRequestModel(
+      id: other.id.isNotEmpty ? other.id : id,
+      pickupAddress: other.pickupAddress.isNotEmpty ? other.pickupAddress : pickupAddress,
+      pickupLat: other.pickupLat != 0.0 ? other.pickupLat : pickupLat,
+      pickupLng: other.pickupLng != 0.0 ? other.pickupLng : pickupLng,
+      dropAddress: other.dropAddress.isNotEmpty ? other.dropAddress : dropAddress,
+      dropLat: other.dropLat != 0.0 ? other.dropLat : dropLat,
+      dropLng: other.dropLng != 0.0 ? other.dropLng : dropLng,
+      fare: other.fare > 0.0 ? other.fare : fare,
+      distance: other.distance.isNotEmpty ? other.distance : distance,
+      duration: other.duration.isNotEmpty ? other.duration : duration,
+      riderName: other.riderName.isNotEmpty ? other.riderName : riderName,
+      riderPhone: other.riderPhone.isNotEmpty ? other.riderPhone : riderPhone,
+      vehicleType: other.vehicleType.isNotEmpty ? other.vehicleType : vehicleType,
+      paymentMethod: other.paymentMethod.isNotEmpty ? other.paymentMethod : paymentMethod,
+      status: other.status.isNotEmpty ? other.status : status,
+      otp: other.otp ?? otp,
     );
   }
 
@@ -126,6 +203,8 @@ class RideRequestModel {
       'duration': duration,
       'riderName': riderName,
       'riderPhone': riderPhone,
+      'vehicleType': vehicleType,
+      'paymentMethod': paymentMethod,
       'status': status,
       'otp': otp,
     };
@@ -144,6 +223,8 @@ class RideRequestModel {
     String? duration,
     String? riderName,
     String? riderPhone,
+    String? vehicleType,
+    String? paymentMethod,
     String? status,
     String? otp,
   }) {
@@ -160,6 +241,8 @@ class RideRequestModel {
       duration: duration ?? this.duration,
       riderName: riderName ?? this.riderName,
       riderPhone: riderPhone ?? this.riderPhone,
+      vehicleType: vehicleType ?? this.vehicleType,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
       status: status ?? this.status,
       otp: otp ?? this.otp,
     );

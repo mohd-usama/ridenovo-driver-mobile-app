@@ -30,6 +30,7 @@ class ApiConstants {
   static String acceptRideRequest(String rideId) => '/driver/riderequests/$rideId/accept';
   static String rejectRideRequest(String rideId) => '/driver/riderequests/$rideId/reject';
   static String getRideDetails(String rideId) => '/driver/rides/$rideId';
+  static String getRideRoute(String rideId, double lat, double lng) => '/driver/rides/$rideId/route?lat=$lat&lng=$lng';
   static String arrivedAtPickup(String rideId) => '/driver/rides/$rideId/arrived';
   static String getWaitingCharges(String rideId) => '/driver/rides/$rideId/waiting';
   static String startRide(String rideId) => '/driver/rides/$rideId/start';
