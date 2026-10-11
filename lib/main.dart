@@ -12,6 +12,6 @@ class RidonovaDriverApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(title: 'Ridonova Captain Driver 2.0', debugShowCheckedModeBanner: false, theme: AppTheme.lightTheme, home: const SplashScreen());
+    return MaterialApp(title: 'Ridonova Captain Driver 2', debugShowCheckedModeBanner: false, theme: AppTheme.lightTheme, home: const SplashScreen());
   }
 }
