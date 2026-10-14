@@ -65,6 +65,7 @@ class RideNotifier extends StateNotifier<RideState> {
   Timer? _locationTimer;
   double? currentLat;
   double? currentLng;
+  final Set<String> _dismissedRideIds = {};
 
   RideNotifier({ApiService? apiService}) : _apiService = apiService ?? ApiService(), super(RideState()) {
     restoreDutyStatus();
@@ -216,11 +217,15 @@ class RideNotifier extends StateNotifier<RideState> {
         if (dataPayload is List) {
           for (var item in dataPayload) {
             final parsed = RideRequestModel.tryParse(item);
-            if (parsed != null) requests.add(parsed);
+            if (parsed != null && !_dismissedRideIds.contains(parsed.id)) {
+              requests.add(parsed);
+            }
           }
         } else if (dataPayload is Map<String, dynamic> && dataPayload.isNotEmpty) {
           final parsed = RideRequestModel.tryParse(dataPayload);
-          if (parsed != null) requests.add(parsed);
+          if (parsed != null && !_dismissedRideIds.contains(parsed.id)) {
+            requests.add(parsed);
+          }
         }
 
         state = state.copyWith(pendingRequests: requests);
@@ -307,9 +312,7 @@ class RideNotifier extends StateNotifier<RideState> {
 
         if (dataPayload is Map<String, dynamic>) {
           final fetchedRide = RideRequestModel.fromJson(dataPayload);
-          final mergedRide = state.activeRide != null
-              ? state.activeRide!.mergeWith(fetchedRide)
-              : fetchedRide;
+          final mergedRide = state.activeRide != null ? state.activeRide!.mergeWith(fetchedRide) : fetchedRide;
           state = state.copyWith(activeRide: mergedRide);
         }
       } catch (_) {}
@@ -339,7 +342,11 @@ class RideNotifier extends StateNotifier<RideState> {
               updated = true;
             }
             if (active.pickupAddress.isEmpty && routeModel.target == 'pickup' && routeModel.targetAddress.isNotEmpty) {
-              active = active.copyWith(pickupAddress: routeModel.targetAddress, pickupLat: routeModel.targetLat, pickupLng: routeModel.targetLng);
+              active = active.copyWith(
+                pickupAddress: routeModel.targetAddress,
+                pickupLat: routeModel.targetLat,
+                pickupLng: routeModel.targetLng,
+              );
               updated = true;
             }
             if (active.dropAddress.isEmpty && routeModel.target == 'dropoff' && routeModel.targetAddress.isNotEmpty) {
@@ -410,11 +417,10 @@ class RideNotifier extends StateNotifier<RideState> {
 
   /// Reject Ride Request (POST /driver/riderequests/{rideId}/reject)
   Future<bool> rejectRide(String rideId, {String? reason}) async {
-    state = state.copyWith(isRideLoading: true, errorMessage: null);
-
-    final response = await _apiService.post(ApiConstants.rejectRideRequest(rideId), data: {'reason': reason ?? 'Too far'});
-
+    _dismissedRideIds.add(rideId);
     state = state.copyWith(isRideLoading: false, pendingRequests: state.pendingRequests.where((r) => r.id != rideId).toList());
+
+    final response = await _apiService.post(ApiConstants.rejectRideRequest(rideId), data: {'reason': reason ?? 'Driver rejected'});
     return response.isSuccess;
   }
 
@@ -424,12 +430,7 @@ class RideNotifier extends StateNotifier<RideState> {
 
     await _apiService.post(ApiConstants.cancelRide(rideId), data: {'reason': reason ?? 'Driver cancelled'});
 
-    state = state.copyWith(
-      isRideLoading: false,
-      clearActiveRide: true,
-      clearActiveRoute: true,
-      rideStep: RideStep.none,
-    );
+    state = state.copyWith(isRideLoading: false, clearActiveRide: true, clearActiveRoute: true, rideStep: RideStep.none);
     return true;
   }
 
@@ -440,12 +441,7 @@ class RideNotifier extends StateNotifier<RideState> {
     final response = await _apiService.post(ApiConstants.completeRide(rideId));
 
     if (response.isSuccess) {
-      state = state.copyWith(
-        isRideLoading: false,
-        rideStep: RideStep.completed,
-        clearActiveRide: true,
-        clearActiveRoute: true,
-      );
+      state = state.copyWith(isRideLoading: false, rideStep: RideStep.completed, clearActiveRide: true, clearActiveRoute: true);
       return true;
     } else {
       state = state.copyWith(isRideLoading: false, errorMessage: response.errorMessage ?? 'Failed to complete ride');
@@ -455,12 +451,7 @@ class RideNotifier extends StateNotifier<RideState> {
 
   /// Complete Ride local reset
   void completeActiveRide() {
-    state = state.copyWith(
-      isRideLoading: false,
-      clearActiveRide: true,
-      clearActiveRoute: true,
-      rideStep: RideStep.none,
-    );
+    state = state.copyWith(isRideLoading: false, clearActiveRide: true, clearActiveRoute: true, rideStep: RideStep.none);
   }
 
   /// Get Waiting Charges / Time (GET /driver/rides/{rideId}/waiting)

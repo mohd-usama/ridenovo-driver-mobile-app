@@ -371,7 +371,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
 
           // 3. Real Incoming Ride Request Card (From GET /driver/ride-requests)
           if (isOnline && activeRide == null && pendingRequests.isNotEmpty)
-            Positioned(left: 16, right: 16, bottom: 120, child: _buildIncomingRideCard(pendingRequests.first)),
+            Positioned(left: 16, right: 16, bottom: 120, child: _buildIncomingRideCard(pendingRequests.first, rideState)),
 
           // 4. Active Ride Execution Flow Sheet (Step-Based State Machine)
           if (activeRide != null)
@@ -384,7 +384,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     );
   }
 
-  Widget _buildIncomingRideCard(RideRequestModel req) {
+  Widget _buildIncomingRideCard(RideRequestModel req, RideState state) {
     final rideNotifier = ref.read(rideProvider.notifier);
     final distanceText = req.distance.isNotEmpty ? req.distance : 'Nearby';
     final durationText = req.duration.isNotEmpty ? ' • ${req.duration}' : '';
@@ -514,13 +514,25 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                     backgroundColor: AppColors.success,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  onPressed: () {
-                    rideNotifier.acceptRide(req.id, driverLat: _currentPosition.latitude, driverLng: _currentPosition.longitude);
-                  },
-                  child: const Text(
-                    'ACCEPT RIDE',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+                  onPressed: state.isRideLoading
+                      ? null
+                      : () async {
+                          final success = await rideNotifier.acceptRide(
+                            req.id,
+                            driverLat: _currentPosition.latitude,
+                            driverLng: _currentPosition.longitude,
+                          );
+                          if (mounted) {
+                            if (success) {
+                              AppFlushbar.success(context, title: 'Ride Accepted! 🚖', message: 'Head to the pickup location.');
+                            } else {
+                              AppFlushbar.error(context, title: 'Accept Failed', message: state.errorMessage ?? 'Failed to accept ride.');
+                            }
+                          }
+                        },
+                  child: state.isRideLoading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('ACCEPT RIDE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
               ),
             ],
@@ -631,7 +643,18 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
           if (state.rideStep == RideStep.accepted) ...[
             ElevatedButton(
               style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: AppColors.primary),
-              onPressed: state.isRideLoading ? null : () => rideNotifier.markArrived(ride.id),
+              onPressed: state.isRideLoading
+                  ? null
+                  : () async {
+                      final success = await rideNotifier.markArrived(ride.id);
+                      if (mounted) {
+                        if (success) {
+                          AppFlushbar.success(context, title: 'Arrived at Pickup 📍', message: 'Ask rider for 4-digit OTP.');
+                        } else {
+                          AppFlushbar.error(context, title: 'Action Failed', message: state.errorMessage ?? 'Failed to mark arrived.');
+                        }
+                      }
+                    },
               child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('MARK ARRIVED AT PICKUP'),
             ),
           ]
@@ -662,9 +685,13 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                         driverLat: _currentPosition.latitude,
                         driverLng: _currentPosition.longitude,
                       );
-                      if (mounted && success) {
-                        _otpController.clear();
-                        AppFlushbar.success(context, title: 'Ride Started! 🚖', message: 'Trip is now in progress.');
+                      if (mounted) {
+                        if (success) {
+                          _otpController.clear();
+                          AppFlushbar.success(context, title: 'Ride Started! 🚖', message: 'Trip is now in progress.');
+                        } else {
+                          AppFlushbar.error(context, title: 'Start Ride Failed', message: state.errorMessage ?? 'Invalid OTP entered. Please try again.');
+                        }
                       }
                     },
               child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('START RIDE'),
@@ -686,11 +713,19 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: AppColors.secondary),
-              onPressed: () {
-                rideNotifier.completeActiveRide();
-                AppFlushbar.success(context, title: 'Trip Completed! 🎉', message: 'Payment collected & trip ended successfully.');
-              },
-              child: const Text('COMPLETE RIDE'),
+              onPressed: state.isRideLoading
+                  ? null
+                  : () async {
+                      final success = await rideNotifier.completeRide(ride.id);
+                      if (mounted) {
+                        if (success) {
+                          AppFlushbar.success(context, title: 'Trip Completed! 🎉', message: 'Payment collected & trip ended successfully.');
+                        } else {
+                          AppFlushbar.error(context, title: 'Completion Failed', message: state.errorMessage ?? 'Failed to complete trip.');
+                        }
+                      }
+                    },
+              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('COMPLETE RIDE'),
             ),
           ],
         ],

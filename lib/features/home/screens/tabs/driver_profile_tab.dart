@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/app_flushbar.dart';
 import '../../../auth/auth_provider.dart';
 import '../../../auth/phone_login_screen.dart';
 import '../../../kyc/kyc_provider.dart';
 import '../../../vehicle/vehicle_provider.dart';
+import '../../../rides/ride_provider.dart';
 
 class DriverProfileTab extends ConsumerStatefulWidget {
   const DriverProfileTab({super.key});
@@ -282,17 +284,68 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
                         'Logout',
                         style: TextStyle(fontSize: 14, color: AppColors.error, fontWeight: FontWeight.bold),
                       ),
-                      onTap: () async {
-                        // Call Logout API
-                        await ref.read(authProvider.notifier).logout();
-                        if (context.mounted) {
-                          AppFlushbar.success(context, title: 'Logged Out', message: 'You have been logged out successfully.');
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (_) => const PhoneLoginScreen()),
-                            (route) => false,
-                          );
-                        }
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (dialogContext) {
+                            bool isLoggingOut = false;
+                            return StatefulBuilder(
+                              builder: (context, setDialogState) {
+                                return AlertDialog(
+                                  title: const Text('Logout?'),
+                                  content: const Text('Are you sure you want to logout? You will be set offline and all active processes will be closed.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: isLoggingOut ? null : () => Navigator.pop(dialogContext),
+                                      child: const Text('CANCEL'),
+                                    ),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+                                      onPressed: isLoggingOut
+                                          ? null
+                                          : () async {
+                                              setDialogState(() {
+                                                isLoggingOut = true;
+                                              });
+
+                                              // 1. Go offline and stop all timers/processes in ride provider
+                                              await ref.read(rideProvider.notifier).goOffline();
+
+                                              // 2. Call auth logout & clear session
+                                              await ref.read(authProvider.notifier).logout();
+
+                                              // 3. Clear duty status in SharedPreferences explicitly
+                                              try {
+                                                final prefs = await SharedPreferences.getInstance();
+                                                await prefs.setBool('is_duty_online', false);
+                                                await prefs.remove('is_duty_online');
+                                              } catch (_) {}
+
+                                              if (context.mounted) {
+                                                Navigator.pop(dialogContext);
+                                                AppFlushbar.success(context, title: 'Logged Out 🔴', message: 'You have been logged out successfully.');
+                                                Navigator.pushAndRemoveUntil(
+                                                  context,
+                                                  MaterialPageRoute(builder: (_) => const PhoneLoginScreen()),
+                                                  (route) => false,
+                                                );
+                                              }
+                                            },
+                                      child: isLoggingOut
+                                          ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                            )
+                                          : const Text('YES, LOGOUT'),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                          },
+                        );
                       },
                     ),
                   ],
