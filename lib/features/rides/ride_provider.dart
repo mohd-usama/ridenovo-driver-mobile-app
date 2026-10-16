@@ -7,6 +7,7 @@ import '../../core/network/api_service.dart';
 import 'models/ride_request_model.dart';
 import 'models/ride_route_model.dart';
 
+
 enum RideStep { none, accepted, arrived, otpEntered, started, completed, cancelled }
 
 class RideState {
@@ -469,7 +470,7 @@ class RideNotifier extends StateNotifier<RideState> {
     return response.isSuccess;
   }
 
-  /// Request Payout (POST /driver/payout-request)
+  // Request Payout (POST /driver/payout-request)
   Future<bool> requestPayout({required double amount}) async {
     final response = await _apiService.post(ApiConstants.payoutRequest, data: {'amount': amount});
     return response.isSuccess;
