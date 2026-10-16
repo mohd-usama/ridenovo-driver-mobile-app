@@ -1,6 +1,7 @@
 class ApiConstants {
   static const String baseUrl = 'http://103.160.107.238:5000/api';
   static const String driverBaseUrl = 'http://103.160.107.238:5000/api/driver';
+  static const String socketUrl = 'http://103.160.107.238:5000';
   static const String defaultDevToken = 'dev-driver-test';
 
   // Auth Endpoints
@@ -38,8 +39,9 @@ class ApiConstants {
   static String cancelRide(String rideId) => '/driver/rides/$rideId/cancel';
   static String rateRider(String rideId) => '/driver/rides/$rideId/rate';
 
-  // Navigation & Places
+  // Navigation, Calls & Places
   static const String fetchRoute = '/places/route';
+  static const String maskCall = '/call/mask-call';
 
   // Wallet, History & Payout
   static const String driverWallet = '/driver/wallet';

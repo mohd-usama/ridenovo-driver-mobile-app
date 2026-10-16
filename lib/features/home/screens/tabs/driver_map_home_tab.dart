@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart' as loc;
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/app_flushbar.dart';
 import '../../../auth/auth_provider.dart';
@@ -18,6 +19,7 @@ class DriverMapHomeTab extends ConsumerStatefulWidget {
 class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
   GoogleMapController? _mapController;
   final TextEditingController _otpController = TextEditingController();
+  final TextEditingController _ratingCommentController = TextEditingController();
   final loc.Location _locationService = loc.Location();
 
   static const LatLng _defaultPosition = LatLng(20.2961, 85.8245); // Bhubaneswar fallback
@@ -26,6 +28,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
   Set<Polyline> _polylines = {};
   String? _lastRoutedRideId;
   bool _isLoadingLocation = true;
+  int _selectedRating = 5;
 
   @override
   void initState() {
@@ -35,15 +38,21 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     });
   }
 
+  @override
+  void dispose() {
+    _otpController.dispose();
+    _ratingCommentController.dispose();
+    super.dispose();
+  }
+
   Future<void> _checkAndRequestLocation() async {
     try {
-      // 1. Check if location service is enabled (Triggers native Google Accuracy dialog as shown in the screenshot)
       bool serviceEnabled = await _locationService.serviceEnabled();
       if (!serviceEnabled) {
         serviceEnabled = await _locationService.requestService();
         if (!serviceEnabled) {
           if (mounted) {
-            AppFlushbar.warning(context, title: 'Location Required', message: 'Please turn on device location to use Ridenova Captain.');
+            AppFlushbar.warning(context, title: 'Location Required', message: 'Please turn on device location to receive nearby rides.');
           }
           setState(() {
             _currentPosition = _defaultPosition;
@@ -61,7 +70,6 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         }
       }
 
-      // 2. Check & Request Location Permission
       loc.PermissionStatus permissionGranted = await _locationService.hasPermission();
       if (permissionGranted == loc.PermissionStatus.denied) {
         permissionGranted = await _locationService.requestPermission();
@@ -85,7 +93,6 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         }
       }
 
-      // 3. Get Current Location
       loc.LocationData locationData = await _locationService.getLocation();
       if (locationData.latitude != null && locationData.longitude != null) {
         final latLng = LatLng(locationData.latitude!, locationData.longitude!);
@@ -104,8 +111,12 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
 
         _mapController?.animateCamera(CameraUpdate.newLatLngZoom(latLng, 16.0));
 
-        // Broadcast location to ride provider
-        ref.read(rideProvider.notifier).updateDriverCoordinates(latLng.latitude, latLng.longitude);
+        ref.read(rideProvider.notifier).updateDriverCoordinates(
+              latLng.latitude,
+              latLng.longitude,
+              heading: locationData.heading,
+              speed: locationData.speed,
+            );
         ref.read(rideProvider.notifier).updateLocation(latLng.latitude, latLng.longitude);
       } else {
         setState(() => _isLoadingLocation = false);
@@ -121,12 +132,6 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     }
   }
 
-  @override
-  void dispose() {
-    _otpController.dispose();
-    super.dispose();
-  }
-
   Future<void> _handleDutyToggle(bool isOnline) async {
     final rideNotifier = ref.read(rideProvider.notifier);
     final authNotifier = ref.read(authProvider.notifier);
@@ -140,7 +145,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
           AppFlushbar.success(
             context,
             title: 'Duty Status: ONLINE 🟢',
-            message: 'Searching for nearby rides & broadcasting live location...',
+            message: 'Broadcasting live location & ready for ride requests...',
           );
         } else {
           AppFlushbar.info(context, title: 'Duty Status: ONLINE', message: 'Switched online successfully.');
@@ -158,21 +163,49 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     }
   }
 
+  Future<void> _launchPhoneCall(String phone, String rideId) async {
+    final rideNotifier = ref.read(rideProvider.notifier);
+    final maskedNum = await rideNotifier.initiateMaskedCall(rideId);
+    final targetPhone = (maskedNum != null && maskedNum.isNotEmpty) ? maskedNum : phone;
+
+    if (targetPhone.isEmpty) {
+      if (mounted) AppFlushbar.error(context, title: 'Call Failed', message: 'No phone number available.');
+      return;
+    }
+
+    final url = Uri.parse('tel:$targetPhone');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
+    } else {
+      if (mounted) AppFlushbar.error(context, title: 'Call Error', message: 'Could not launch phone dialer.');
+    }
+  }
+
+  Future<void> _openExternalNavigation(double lat, double lng) async {
+    if (lat == 0.0 || lng == 0.0) return;
+    final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } else {
+      if (mounted) AppFlushbar.error(context, title: 'Maps Error', message: 'Could not open Google Maps navigation.');
+    }
+  }
+
   void _showCancelConfirmationDialog(String rideId) {
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Cancel Ride?'),
-        content: const Text('Are you sure you want to cancel this ride request? The rider will be notified.'),
+        content: const Text('Are you sure you want to cancel this trip? The customer will be notified.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('NO, KEEP RIDE')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () async {
               Navigator.pop(dialogContext);
-              final success = await ref.read(rideProvider.notifier).cancelRide(rideId);
+              final success = await ref.read(rideProvider.notifier).cancelRide(rideId, reason: 'Driver cancelled');
               if (mounted && success) {
-                AppFlushbar.info(context, title: 'Ride Cancelled', message: 'The ride has been cancelled successfully.');
+                AppFlushbar.info(context, title: 'Ride Cancelled', message: 'The ride has been cancelled.');
               }
             },
             child: const Text('YES, CANCEL'),
@@ -200,8 +233,6 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             ),
           };
         });
-
-        // Re-center map to driver's current position when ride completes or cancels
         _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_currentPosition, 16.0));
       }
       return;
@@ -276,6 +307,12 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     );
   }
 
+  String _formatSeconds(int seconds) {
+    final mins = seconds ~/ 60;
+    final secs = seconds % 60;
+    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
@@ -285,16 +322,35 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
       if (previous?.activeRoute != next.activeRoute || previous?.activeRide != next.activeRide) {
         _updateRouteOnMap(next);
       }
+
+      if (next.rideStep == RideStep.cancelled && previous?.rideStep != RideStep.cancelled) {
+        showDialog(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Ride Cancelled'),
+            content: Text(next.errorMessage ?? 'The ride was cancelled by the customer.'),
+            actions: [
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                  ref.read(rideProvider.notifier).finishCompletedRide();
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     });
 
     final isOnline = rideState.isOnline;
     final activeRide = rideState.activeRide;
-    final pendingRequests = rideState.pendingRequests;
+    final incomingRide = rideState.incomingPopupRide ?? (rideState.pendingRequests.isNotEmpty ? rideState.pendingRequests.first : null);
 
     return Scaffold(
       body: Stack(
         children: [
-          // 1. Google Map Background
+          // 1. Interactive Google Map Background
           GoogleMap(
             initialCameraPosition: CameraPosition(target: _currentPosition, zoom: 16.0),
             markers: _markers,
@@ -310,10 +366,9 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             },
           ),
 
-          // Loading indicator for GPS location
           if (_isLoadingLocation) const Center(child: CircularProgressIndicator(color: AppColors.primary)),
 
-          // 2. Top Controls (Menu, Duty Badge & Re-center)
+          // 2. Top Bar (Duty Badge & Controls)
           Positioned(
             top: topPadding + 12,
             left: 16,
@@ -324,11 +379,11 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                 _buildFloatingIconButton(
                   icon: Icons.menu_rounded,
                   onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Captain Side Menu')));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ridenova Captain Side Menu')));
                   },
                 ),
 
-                // Duty Status Pill Badge
+                // Duty Status Badge
                 GestureDetector(
                   onTap: rideState.isDutyLoading ? null : () => _handleDutyToggle(!isOnline),
                   child: Container(
@@ -339,7 +394,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                       boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 4))],
                     ),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      mainAxisSize: minWidth(20),
                       children: [
                         if (rideState.isDutyLoading)
                           const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -369,23 +424,34 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             ),
           ),
 
-          // 3. Real Incoming Ride Request Card (From GET /driver/ride-requests)
-          if (isOnline && activeRide == null && pendingRequests.isNotEmpty)
-            Positioned(left: 16, right: 16, bottom: 120, child: _buildIncomingRideCard(pendingRequests.first, rideState)),
+          // 3. Real-Time Incoming Ride Popup Modal (15-Second Countdown)
+          if (isOnline && activeRide == null && incomingRide != null)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 120,
+              child: _buildIncomingRidePopupModal(incomingRide, rideState),
+            ),
 
-          // 4. Active Ride Execution Flow Sheet (Step-Based State Machine)
-          if (activeRide != null)
+          // 4. Ride Execution Flow Sheet or Default Duty Sheet
+          if (activeRide != null && rideState.rideStep != RideStep.completed)
             Positioned(left: 0, right: 0, bottom: 0, child: _buildActiveRideExecutionSheet(activeRide, rideState))
+          else if (rideState.rideStep == RideStep.completed)
+            Positioned(left: 0, right: 0, bottom: 0, child: _buildCompletedSummarySheet(rideState))
           else
-            // 5. Default Bottom Duty Sheet
             Positioned(left: 0, right: 0, bottom: 0, child: _buildDefaultDutySheet(isOnline, rideState.isDutyLoading)),
         ],
       ),
     );
   }
 
-  Widget _buildIncomingRideCard(RideRequestModel req, RideState state) {
+  MainAxisSize minWidth(double w) => MainAxisSize.min;
+
+  Widget _buildIncomingRidePopupModal(RideRequestModel req, RideState state) {
     final rideNotifier = ref.read(rideProvider.notifier);
+    final countdown = state.incomingCountdownSeconds;
+    final progress = countdown / 15.0;
+
     final distanceText = req.distance.isNotEmpty ? req.distance : 'Nearby';
     final durationText = req.duration.isNotEmpty ? ' • ${req.duration}' : '';
     final pickupText = req.pickupAddress.isNotEmpty ? req.pickupAddress : 'Pickup Location';
@@ -397,13 +463,25 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 16, offset: const Offset(0, 8))],
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 20, offset: const Offset(0, 8))],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Countdown Timer Progress Bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: Colors.grey.shade200,
+              valueColor: AlwaysStoppedAnimation<Color>(countdown > 5 ? AppColors.primary : AppColors.error),
+            ),
+          ),
+          const SizedBox(height: 12),
+
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -411,7 +489,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
                 child: Text(
-                  'NEW RIDE REQUEST • $distanceText$durationText$vehicleTypeText',
+                  'NEW RIDE • ${countdown}s TIMER • $distanceText$durationText',
                   style: const TextStyle(color: AppColors.primaryDark, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -422,38 +500,41 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             ],
           ),
           const SizedBox(height: 12),
+
           Row(
             children: [
               const CircleAvatar(
-                radius: 14,
+                radius: 16,
                 backgroundColor: AppColors.primary,
-                child: Icon(Icons.person, size: 16, color: Colors.white),
+                child: Icon(Icons.person, size: 18, color: Colors.white),
               ),
               const SizedBox(width: 8),
-              Text(
-                riderName,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+              Expanded(
+                child: Text(
+                  '$riderName$vehicleTypeText',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                ),
               ),
               if (req.paymentMethod.isNotEmpty) ...[
-                const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(4)),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(6)),
                   child: Text(
                     req.paymentMethod,
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.grey.shade800),
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey.shade800),
                   ),
                 ),
               ],
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Padding(
                 padding: EdgeInsets.only(top: 2),
-                child: Icon(Icons.trip_origin, color: Colors.green, size: 16),
+                child: Icon(Icons.trip_origin, color: Colors.green, size: 18),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -472,7 +553,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             children: [
               const Padding(
                 padding: EdgeInsets.only(top: 2),
-                child: Icon(Icons.location_on, color: Colors.red, size: 16),
+                child: Icon(Icons.location_on, color: Colors.red, size: 18),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -486,6 +567,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
             ],
           ),
           const SizedBox(height: 16),
+
           Row(
             children: [
               Expanded(
@@ -497,12 +579,9 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: () {
-                    rideNotifier.rejectRide(req.id);
+                    rideNotifier.rejectRide(req.id, reason: 'Driver rejected');
                   },
-                  child: const Text(
-                    'REJECT',
-                    style: TextStyle(color: AppColors.error, fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('DECLINE', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.bold)),
                 ),
               ),
               const SizedBox(width: 12),
@@ -532,7 +611,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                         },
                   child: state.isRideLoading
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('ACCEPT RIDE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      : const Text('ACCEPT RIDE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
                 ),
               ),
             ],
@@ -551,7 +630,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         : (route != null && route.riderName.isNotEmpty ? route.riderName : 'Customer');
     final riderPhone = ride.riderPhone.isNotEmpty
         ? ride.riderPhone
-        : (route != null && route.riderPhone.isNotEmpty ? route.riderPhone : 'Available in app');
+        : (route != null && route.riderPhone.isNotEmpty ? route.riderPhone : '');
 
     final pickupText = ride.pickupAddress.isNotEmpty
         ? ride.pickupAddress
@@ -560,6 +639,10 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
     final dropText = ride.dropAddress.isNotEmpty
         ? ride.dropAddress
         : (route != null && route.target == 'dropoff' && route.targetAddress.isNotEmpty ? route.targetAddress : 'Drop Destination');
+
+    final isPickupStep = state.rideStep == RideStep.accepted || state.rideStep == RideStep.arrived;
+    final targetLat = isPickupStep ? ride.pickupLat : ride.dropLat;
+    final targetLng = isPickupStep ? ride.pickupLng : ride.dropLng;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -572,7 +655,6 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Step Header Status Indicator
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -580,19 +662,28 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
                 child: Text(
-                  'ACTIVE RIDE • STEP: ${state.rideStep.name.toUpperCase()}',
+                  'TRIP STATUS: ${state.rideStep.name.toUpperCase()}',
                   style: const TextStyle(color: AppColors.primaryDark, fontWeight: FontWeight.bold, fontSize: 11),
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.close_rounded, color: AppColors.error),
-                onPressed: () => _showCancelConfirmationDialog(ride.id),
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.navigation_rounded, color: AppColors.primary),
+                    tooltip: 'Google Maps Navigation',
+                    onPressed: () => _openExternalNavigation(targetLat, targetLng),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: AppColors.error),
+                    tooltip: 'Cancel Ride',
+                    onPressed: () => _showCancelConfirmationDialog(ride.id),
+                  ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
 
-          // Rider Info
           Row(
             children: [
               const CircleAvatar(
@@ -605,19 +696,26 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(riderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    Text('Phone: $riderPhone', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    Text(riderPhone.isNotEmpty ? 'Phone: $riderPhone' : 'Payment: ${ride.paymentMethod}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                   ],
                 ),
               ),
+              if (riderPhone.isNotEmpty)
+                IconButton(
+                  style: IconButton.styleFrom(backgroundColor: AppColors.success.withValues(alpha: 0.12)),
+                  icon: const Icon(Icons.phone_rounded, color: AppColors.success),
+                  onPressed: () => _launchPhoneCall(riderPhone, ride.id),
+                ),
+              const SizedBox(width: 8),
               Text(
                 '₹ ${ride.fare.toStringAsFixed(0)}',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.success),
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.success),
               ),
             ],
           ),
-          const Divider(height: 24),
+          const Divider(height: 20),
 
-          // Pickup & Drop
           Row(
             children: [
               const Icon(Icons.circle, color: Colors.green, size: 14),
@@ -649,18 +747,39 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                       final success = await rideNotifier.markArrived(ride.id);
                       if (mounted) {
                         if (success) {
-                          AppFlushbar.success(context, title: 'Arrived at Pickup 📍', message: 'Ask rider for 4-digit OTP.');
+                          AppFlushbar.success(context, title: 'Arrived at Pickup 📍', message: 'Waiting timer started. Ask rider for 4-digit OTP.');
                         } else {
                           AppFlushbar.error(context, title: 'Action Failed', message: state.errorMessage ?? 'Failed to mark arrived.');
                         }
                       }
                     },
-              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('MARK ARRIVED AT PICKUP'),
+              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('I HAVE ARRIVED AT PICKUP'),
             ),
           ]
-          // STEP 2: ARRIVED -> ENTER OTP -> START RIDE
+          // STEP 2: ARRIVED -> WAITING TIMER & ENTER OTP -> START RIDE
           else if (state.rideStep == RideStep.arrived) ...[
-            const Text('Enter Rider OTP to Start Ride:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.amber.shade300)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.timer_outlined, color: Colors.amber, size: 20),
+                      SizedBox(width: 8),
+                      Text('Waiting Timer:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    ],
+                  ),
+                  Text(
+                    _formatSeconds(state.waitingSecondsElapsed),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.amber),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text('Enter Rider 4-Digit OTP to Start Ride:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 8),
             TextField(
               controller: _otpController,
@@ -688,13 +807,13 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                       if (mounted) {
                         if (success) {
                           _otpController.clear();
-                          AppFlushbar.success(context, title: 'Ride Started! 🚖', message: 'Trip is now in progress.');
+                          AppFlushbar.success(context, title: 'Ride Started! 🚖', message: 'Navigation switched to drop destination.');
                         } else {
-                          AppFlushbar.error(context, title: 'Start Ride Failed', message: state.errorMessage ?? 'Invalid OTP entered. Please try again.');
+                          AppFlushbar.error(context, title: 'Start Ride Failed', message: state.errorMessage ?? 'The OTP entered is incorrect. Please check with rider and try again.');
                         }
                       }
                     },
-              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('START RIDE'),
+              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('VERIFY OTP & START RIDE'),
             ),
           ]
           // STEP 3: STARTED -> COMPLETE RIDE
@@ -705,8 +824,8 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
               decoration: BoxDecoration(color: AppColors.success.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
               child: const Center(
                 child: Text(
-                  'TRIP IN PROGRESS 🚖',
-                  style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 14),
+                  'TRIP IN PROGRESS 🚖 • NAVIGATING TO DROPOFF',
+                  style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 13),
                 ),
               ),
             ),
@@ -719,15 +838,126 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                       final success = await rideNotifier.completeRide(ride.id);
                       if (mounted) {
                         if (success) {
-                          AppFlushbar.success(context, title: 'Trip Completed! 🎉', message: 'Payment collected & trip ended successfully.');
+                          AppFlushbar.success(context, title: 'Trip Completed! 🎉', message: 'Collect fare payment from rider.');
                         } else {
                           AppFlushbar.error(context, title: 'Completion Failed', message: state.errorMessage ?? 'Failed to complete trip.');
                         }
                       }
                     },
-              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('COMPLETE RIDE'),
+              child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('COMPLETE RIDE & COLLECT FARE'),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompletedSummarySheet(RideState state) {
+    final summary = state.completedFareSummary ?? {};
+    final fareAmt = summary['fare'] ?? summary['totalFare'] ?? summary['amount'] ?? 0.0;
+    final paymentMethod = summary['paymentMethod']?.toString() ?? 'CASH';
+    final riderName = summary['riderName']?.toString() ?? 'Customer';
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 20, offset: Offset(0, -4))],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: const BoxDecoration(color: AppColors.success, shape: BoxShape.circle),
+            child: const Icon(Icons.check_rounded, color: Colors.white, size: 30),
+          ),
+          const SizedBox(height: 12),
+          const Text('Trip Completed Successfully! 🎉', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text('Collect payment from $riderName', style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          const SizedBox(height: 16),
+
+          // Fare Card
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(16)),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Total Collectible Fare', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    const SizedBox(height: 4),
+                    Text('₹ ${fareAmt is num ? fareAmt.toStringAsFixed(0) : fareAmt}',
+                        style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.success)),
+                  ],
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    paymentMethod.toUpperCase(),
+                    style: const TextStyle(color: AppColors.primaryDark, fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Rating Bar
+          const Text('Rate Rider:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(5, (index) {
+              final starIndex = index + 1;
+              return IconButton(
+                icon: Icon(
+                  starIndex <= _selectedRating ? Icons.star_rounded : Icons.star_outline_rounded,
+                  color: Colors.amber,
+                  size: 36,
+                ),
+                onPressed: () {
+                  setState(() => _selectedRating = starIndex);
+                },
+              );
+            }),
+          ),
+          const SizedBox(height: 12),
+
+          TextField(
+            controller: _ratingCommentController,
+            decoration: InputDecoration(
+              hintText: 'Feedback comment (optional)',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: AppColors.primary),
+            onPressed: state.isRideLoading
+                ? null
+                : () async {
+                    final rideNotifier = ref.read(rideProvider.notifier);
+                    final rideId = state.activeRide?.id ?? '';
+                    await rideNotifier.rateRider(
+                      rideId,
+                      rating: _selectedRating,
+                      comment: _ratingCommentController.text.trim(),
+                    );
+                    _ratingCommentController.clear();
+                    if (mounted) {
+                      AppFlushbar.success(context, title: 'Rating Submitted! ⭐️', message: 'Ready for next ride request.');
+                    }
+                  },
+            child: state.isRideLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('SUBMIT & RETURN TO DUTY'),
+          ),
         ],
       ),
     );
@@ -763,7 +993,7 @@ class _DriverMapHomeTabState extends ConsumerState<DriverMapHomeTab> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      isOnline ? 'Broadcasting location & waiting for bookings...' : 'Turn on duty to start receiving bookings',
+                      isOnline ? 'Broadcasting live location & ready for bookings...' : 'Turn on duty to start receiving ride bookings',
                       style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
