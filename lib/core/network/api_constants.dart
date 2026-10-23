@@ -45,6 +45,18 @@ class ApiConstants {
 
   // Wallet, History & Payout
   static const String driverWallet = '/driver/wallet';
+  static const String driverPayouts = '/driver/payouts';
   static const String driverRides = '/driver/rides';
   static const String payoutRequest = '/driver/payout-request';
+  static String collectCash(String rideId) => '/driver/rides/$rideId/collect-cash';
+
+  // Support & Tickets
+  static const String supportCategories = '/driver/support/categories';
+  static const String supportTickets = '/driver/support/tickets';
+  static String supportTicketDetails(String ticketId) => '/driver/support/tickets/$ticketId';
+  static String supportTicketReply(String ticketId) => '/driver/support/tickets/$ticketId/reply';
+
+  // Account Deletion
+  static const String deletionReasons = '/driver/account/deletion-reasons';
+  static const String deleteAccount = '/driver/account';
 }

@@ -39,6 +39,11 @@ class RideRouteModel {
       return points;
     } else if (polyline.isNotEmpty) {
       return decodePolyline(polyline);
+    } else if (driverLat != 0.0 && driverLng != 0.0 && targetLat != 0.0 && targetLng != 0.0) {
+      return [
+        LatLng(driverLat, driverLng),
+        LatLng(targetLat, targetLng),
+      ];
     }
     return [];
   }

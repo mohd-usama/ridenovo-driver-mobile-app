@@ -15,6 +15,12 @@ class RideRequestModel {
   final String paymentMethod;
   final String status; // searching, requested, accepted, arrived, started, completed, cancelled
   final String? otp;
+  // 🟢 Nayi Fields (Rapido - Book for Someone Else)
+  final bool isForSomeoneElse;
+  final String passengerName;
+  final String passengerPhone;
+  final String bookedByName;
+  final String bookedByPhone;
 
   RideRequestModel({
     required this.id,
@@ -33,6 +39,12 @@ class RideRequestModel {
     this.paymentMethod = 'CASH',
     this.status = 'requested',
     this.otp,
+    // 🟢 Constructor defaults
+    this.isForSomeoneElse = false,
+    this.passengerName = '',
+    this.passengerPhone = '',
+    this.bookedByName = '',
+    this.bookedByPhone = '',
   });
 
   static RideRequestModel? tryParse(dynamic json) {
@@ -147,6 +159,17 @@ class RideRequestModel {
 
     String? otpVal = map['otp']?.toString() ?? map['otp_code']?.toString();
 
+    // 🟢 Someone Else Extraction
+    final bool isSomeoneElse = map['isForSomeoneElse'] == true || 
+                               map['isBookedForSomeoneElse'] == true ||
+                               map['bookingType'] == 'someone_else';
+    final String passName = map['passengerName']?.toString() ?? 
+                            (map['passenger'] is Map ? map['passenger']['name']?.toString() : null) ?? '';
+    final String passPhone = map['passengerPhone']?.toString() ?? 
+                             (map['passenger'] is Map ? map['passenger']['phone']?.toString() : null) ?? '';
+    final String bookerName = (map['bookedBy'] is Map ? map['bookedBy']['name']?.toString() : null) ?? rName;
+    final String bookerPhone = (map['bookedBy'] is Map ? map['bookedBy']['phone']?.toString() : null) ?? rPhone;
+
     return RideRequestModel(
       id: id,
       pickupAddress: pAddress,
@@ -164,6 +187,12 @@ class RideRequestModel {
       paymentMethod: pMethod,
       status: map['status']?.toString() ?? 'requested',
       otp: otpVal,
+      // 🟢 Pass parsed values
+      isForSomeoneElse: isSomeoneElse,
+      passengerName: passName,
+      passengerPhone: passPhone,
+      bookedByName: bookerName,
+      bookedByPhone: bookerPhone,
     );
   }
 
@@ -173,7 +202,7 @@ class RideRequestModel {
       id: other.id.isNotEmpty ? other.id : id,
       pickupAddress: other.pickupAddress.isNotEmpty ? other.pickupAddress : pickupAddress,
       pickupLat: other.pickupLat != 0.0 ? other.pickupLat : pickupLat,
-      pickupLng: other.pickupLng != 0.0 ? other.pickupLng : pickupLng,
+      pickupLng: other.pickupLng != 0.0 ? other.pickupLng : dropLng,
       dropAddress: other.dropAddress.isNotEmpty ? other.dropAddress : dropAddress,
       dropLat: other.dropLat != 0.0 ? other.dropLat : dropLat,
       dropLng: other.dropLng != 0.0 ? other.dropLng : dropLng,
@@ -186,6 +215,11 @@ class RideRequestModel {
       paymentMethod: other.paymentMethod.isNotEmpty ? other.paymentMethod : paymentMethod,
       status: other.status.isNotEmpty ? other.status : status,
       otp: other.otp ?? otp,
+      isForSomeoneElse: other.isForSomeoneElse || isForSomeoneElse,
+      passengerName: other.passengerName.isNotEmpty ? other.passengerName : passengerName,
+      passengerPhone: other.passengerPhone.isNotEmpty ? other.passengerPhone : passengerPhone,
+      bookedByName: other.bookedByName.isNotEmpty ? other.bookedByName : bookedByName,
+      bookedByPhone: other.bookedByPhone.isNotEmpty ? other.bookedByPhone : bookedByPhone,
     );
   }
 
@@ -207,6 +241,11 @@ class RideRequestModel {
       'paymentMethod': paymentMethod,
       'status': status,
       'otp': otp,
+      'isForSomeoneElse': isForSomeoneElse,
+      'passengerName': passengerName,
+      'passengerPhone': passengerPhone,
+      'bookedByName': bookedByName,
+      'bookedByPhone': bookedByPhone,
     };
   }
 
@@ -227,6 +266,11 @@ class RideRequestModel {
     String? paymentMethod,
     String? status,
     String? otp,
+    bool? isForSomeoneElse,
+    String? passengerName,
+    String? passengerPhone,
+    String? bookedByName,
+    String? bookedByPhone,
   }) {
     return RideRequestModel(
       id: id ?? this.id,
@@ -245,6 +289,11 @@ class RideRequestModel {
       paymentMethod: paymentMethod ?? this.paymentMethod,
       status: status ?? this.status,
       otp: otp ?? this.otp,
+      isForSomeoneElse: isForSomeoneElse ?? this.isForSomeoneElse,
+      passengerName: passengerName ?? this.passengerName,
+      passengerPhone: passengerPhone ?? this.passengerPhone,
+      bookedByName: bookedByName ?? this.bookedByName,
+      bookedByPhone: bookedByPhone ?? this.bookedByPhone,
     );
   }
 }

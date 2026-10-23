@@ -437,6 +437,19 @@ class RideNotifier extends StateNotifier<RideState> {
 
   /// 6. Accept Ride Request
   Future<bool> acceptRide(String rideId, {double? driverLat, double? driverLng}) async {
+    // 🛡️ Section 5.18.1: Wallet Balance Rules Enforced (-₹1,000 threshold block)
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final double balance = prefs.getDouble('wallet_balance') ?? 0.0;
+      if (balance <= -1000.0) {
+        state = state.copyWith(
+          isRideLoading: false,
+          errorMessage: 'Your wallet balance is -₹${balance.abs().toStringAsFixed(2)}. Ride acceptance is blocked as per platform policy (-₹1,000 limit). Please clear your dues.',
+        );
+        return false;
+      }
+    } catch (_) {}
+
     dismissIncomingRidePopup();
     state = state.copyWith(isRideLoading: true, errorMessage: null);
 
@@ -484,9 +497,11 @@ class RideNotifier extends StateNotifier<RideState> {
         clearIncomingPopup: true,
       );
 
-      if (driverLat != null && driverLng != null) {
-        await fetchRideRoute(rideId, lat: driverLat, lng: driverLng);
-      }
+      await fetchRideRoute(
+        rideId,
+        lat: driverLat ?? finalActive.pickupLat,
+        lng: driverLng ?? finalActive.pickupLng,
+      );
 
       return true;
     } else {
@@ -577,7 +592,7 @@ class RideNotifier extends StateNotifier<RideState> {
   }
 
   /// 8. Mark Arrived at Pickup (POST /driver/rides/{rideId}/arrived)
-  Future<bool> markArrived(String rideId) async {
+  Future<bool> markArrived(String rideId, {double? driverLat, double? driverLng}) async {
     state = state.copyWith(isRideLoading: true, errorMessage: null);
 
     final response = await _apiService.post(ApiConstants.arrivedAtPickup(rideId));
@@ -591,6 +606,13 @@ class RideNotifier extends StateNotifier<RideState> {
         rideStep: RideStep.arrived,
         activeRide: state.activeRide?.copyWith(status: 'arrived'),
       );
+
+      await fetchRideRoute(
+        rideId,
+        lat: driverLat ?? state.activeRide?.pickupLat ?? 0.0,
+        lng: driverLng ?? state.activeRide?.pickupLng ?? 0.0,
+      );
+
       return true;
     } else {
       state = state.copyWith(
@@ -622,9 +644,11 @@ class RideNotifier extends StateNotifier<RideState> {
       );
 
       // Fetch route polyline to dropoff destination
-      if (driverLat != null && driverLng != null) {
-        await fetchRideRoute(rideId, lat: driverLat, lng: driverLng);
-      }
+      await fetchRideRoute(
+        rideId,
+        lat: driverLat ?? state.activeRide?.dropLat ?? 0.0,
+        lng: driverLng ?? state.activeRide?.dropLng ?? 0.0,
+      );
 
       return true;
     } else {
@@ -759,6 +783,17 @@ class RideNotifier extends StateNotifier<RideState> {
   // Request Payout (POST /driver/payout-request)
   Future<bool> requestPayout({required double amount}) async {
     final response = await _apiService.post(ApiConstants.payoutRequest, data: {'amount': amount});
+    return response.isSuccess;
+  }
+
+  /// Confirm Cash Collection & Commission Auto-Deduct (POST /driver/rides/{rideId}/collect-cash)
+  Future<bool> collectCash(String rideId, double amount) async {
+    state = state.copyWith(isRideLoading: true, errorMessage: null);
+    final response = await _apiService.post(
+      ApiConstants.collectCash(rideId),
+      data: {'amount': amount},
+    );
+    state = state.copyWith(isRideLoading: false);
     return response.isSuccess;
   }
 }

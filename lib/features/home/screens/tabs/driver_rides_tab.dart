@@ -5,6 +5,9 @@ import '../../../../core/network/api_constants.dart';
 import '../../../../core/network/api_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import 'package:ridenovo_rider_mobile_app/features/rides/models/ride_history_model.dart';
+import '../../../rides/ride_provider.dart';
+
+final rideHistoryRefreshTriggerProvider = StateProvider<int>((ref) => 0);
 
 class DriverRidesTab extends ConsumerStatefulWidget {
   const DriverRidesTab({super.key});
@@ -16,6 +19,7 @@ class DriverRidesTab extends ConsumerStatefulWidget {
 class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
   int _selectedFilterIndex = 0; // 0: All, 1: Completed, 2: Cancelled
   bool _isLoading = true;
+  bool _isFetching = false;
   List<RideHistoryItemModel> _rides = [];
   String? _errorMessage;
 
@@ -26,10 +30,15 @@ class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
   }
 
   Future<void> _fetchRideHistory() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    if (_isFetching) return;
+    _isFetching = true;
+
+    if (_rides.isEmpty) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     try {
       final apiService = ApiService();
@@ -62,13 +71,16 @@ class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
           setState(() {
             _rides = loadedRides;
             _isLoading = false;
+            _errorMessage = null;
           });
         }
       } else {
         if (mounted) {
           setState(() {
             _isLoading = false;
-            _errorMessage = response.errorMessage ?? 'Failed to load ride history';
+            if (_rides.isEmpty) {
+              _errorMessage = response.errorMessage ?? 'Failed to load ride history';
+            }
           });
         }
       }
@@ -76,14 +88,31 @@ class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'An error occurred while fetching rides.';
+          if (_rides.isEmpty) {
+            _errorMessage = 'An error occurred while fetching rides.';
+          }
         });
       }
+    } finally {
+      _isFetching = false;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(rideHistoryRefreshTriggerProvider, (previous, next) {
+      if (previous != next) {
+        _fetchRideHistory();
+      }
+    });
+
+    ref.listen<RideState>(rideProvider, (previous, next) {
+      if (previous?.rideStep != next.rideStep &&
+          (next.rideStep == RideStep.completed || next.rideStep == RideStep.none)) {
+        _fetchRideHistory();
+      }
+    });
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -128,10 +157,20 @@ class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
                             ),
                           )
                         : _rides.isEmpty
-                            ? const Center(
-                                child: Text(
-                                  'No ride history found.',
-                                  style: TextStyle(color: AppColors.textSecondary),
+                            ? RefreshIndicator(
+                                onRefresh: _fetchRideHistory,
+                                color: AppColors.primary,
+                                child: ListView(
+                                  physics: const AlwaysScrollableScrollPhysics(),
+                                  padding: const EdgeInsets.symmetric(vertical: 40),
+                                  children: const [
+                                    Center(
+                                      child: Text(
+                                        'No ride history found.',
+                                        style: TextStyle(color: AppColors.textSecondary),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               )
                             : RefreshIndicator(
@@ -282,6 +321,7 @@ class _DriverRidesTabState extends ConsumerState<DriverRidesTab> {
         if (selected) {
           setState(() {
             _selectedFilterIndex = index;
+            _rides = [];
           });
           _fetchRideHistory();
         }

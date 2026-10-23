@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/app_flushbar.dart';
 import '../../../auth/auth_provider.dart';
@@ -8,6 +9,7 @@ import '../../../auth/phone_login_screen.dart';
 import '../../../kyc/kyc_provider.dart';
 import '../../../vehicle/vehicle_provider.dart';
 import '../../../rides/ride_provider.dart';
+import '../../../support/support_tickets_screen.dart';
 
 class DriverProfileTab extends ConsumerStatefulWidget {
   const DriverProfileTab({super.key});
@@ -37,8 +39,7 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
     final user = authState.user;
 
     final displayName =
-        user?.fullName ??
-        (kyc.fullName.isNotEmpty ? kyc.fullName : (kyc.bankAccountName.isNotEmpty ? kyc.bankAccountName : 'Captain Partner'));
+        user?.fullName ?? (kyc.fullName.isNotEmpty ? kyc.fullName : (kyc.bankAccountName.isNotEmpty ? kyc.bankAccountName : 'Captain Partner'));
     final displayPhone = user?.phone ?? authState.phoneNumber;
     final displayEmail = user?.email ?? kyc.email;
 
@@ -142,10 +143,7 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
                         children: [
                           Container(
                             padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
+                            decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
                             child: const Icon(Icons.local_taxi_rounded, color: AppColors.primary, size: 26),
                           ),
                           const SizedBox(width: 14),
@@ -274,7 +272,28 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
                       title: const Text('24x7 Captain Support', style: TextStyle(fontSize: 14)),
                       trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
                       onTap: () {
-                        AppFlushbar.info(context, title: 'Captain Helpline', message: 'Connecting to Captain Support team...');
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const SupportTicketsScreen()));
+                      },
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.privacy_tip_rounded, color: AppColors.secondary),
+                      title: const Text('Privacy Policy', style: TextStyle(fontSize: 14)),
+                      trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                      onTap: () {
+                        _showPrivacyPolicyDialog(context);
+                      },
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.delete_forever_rounded, color: AppColors.error),
+                      title: const Text(
+                        'Delete Account',
+                        style: TextStyle(fontSize: 14, color: AppColors.error, fontWeight: FontWeight.bold),
+                      ),
+                      trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                      onTap: () {
+                        _showDeleteAccountBottomSheet(context, ref);
                       },
                     ),
                     const Divider(height: 1),
@@ -294,12 +313,11 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
                               builder: (context, setDialogState) {
                                 return AlertDialog(
                                   title: const Text('Logout?'),
-                                  content: const Text('Are you sure you want to logout? You will be set offline and all active processes will be closed.'),
+                                  content: const Text(
+                                    'Are you sure you want to logout? You will be set offline and all active processes will be closed.',
+                                  ),
                                   actions: [
-                                    TextButton(
-                                      onPressed: isLoggingOut ? null : () => Navigator.pop(dialogContext),
-                                      child: const Text('CANCEL'),
-                                    ),
+                                    TextButton(onPressed: isLoggingOut ? null : () => Navigator.pop(dialogContext), child: const Text('CANCEL')),
                                     ElevatedButton(
                                       style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
                                       onPressed: isLoggingOut
@@ -324,7 +342,11 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
 
                                               if (context.mounted) {
                                                 Navigator.pop(dialogContext);
-                                                AppFlushbar.success(context, title: 'Logged Out 🔴', message: 'You have been logged out successfully.');
+                                                AppFlushbar.success(
+                                                  context,
+                                                  title: 'Logged Out 🔴',
+                                                  message: 'You have been logged out successfully.',
+                                                );
                                                 Navigator.pushAndRemoveUntil(
                                                   context,
                                                   MaterialPageRoute(builder: (_) => const PhoneLoginScreen()),
@@ -400,6 +422,264 @@ class _DriverProfileTabState extends ConsumerState<DriverProfileTab> {
             ],
           ),
       ],
+    );
+  }
+
+  void _showPrivacyPolicyDialog(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return SafeArea(
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Privacy Policy - Ridonova Driver',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                    ),
+                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(context)),
+                  ],
+                ),
+                const Divider(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        Text(
+                          'Effective Date: October 17, 2026',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.primary),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'Ridonova ("we", "our", or "us") operates the Ridonova Driver Mobile Application. This Privacy Policy informs you regarding the collection, use, and disclosure of personal data when you use our app.',
+                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          '1. Information We Collect',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          '• Personal Data: Full name, phone number (7978800300), email (support@ridonova.com).\n'
+                          '• KYC Documents: Aadhar, PAN, Driving License.\n'
+                          '• Vehicle Information: Registration number, insurance, RC details.\n'
+                          '• Precise Location: Real-time GPS location data when online on duty for ride matching, navigation, and trip tracking.\n'
+                          '• Financial Information: Bank account number, IFSC code, and UPI ID for instant daily payouts.',
+                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          '2. How We Use Your Information',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'We use your data to verify KYC compliance, connect you with nearby riders, calculate earnings, process instant cashouts, and provide 24/7 support assistance.',
+                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          '3. Contact Us',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                        ),
+                        SizedBox(height: 4),
+                        Text('Email: support@ridonova.com\nPhone: 7978800300', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final url = Uri.parse('http://103.160.107.238:5000/privacy-policy.html');
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(url, mode: LaunchMode.externalApplication);
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('OPEN FULL WEB PRIVACY POLICY', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDeleteAccountBottomSheet(BuildContext context, WidgetRef ref) async {
+    List<Map<String, dynamic>> reasons = [];
+    try {
+      reasons = await ref.read(authProvider.notifier).fetchDeletionReasons();
+    } catch (_) {}
+
+    if (reasons.isEmpty) {
+      reasons = [
+        {"id": "low_earnings", "label": "Earnings are lower than expected"},
+        {"id": "switching_platform", "label": "Switching to another platform / company"},
+        {"id": "vehicle_issues", "label": "Vehicle sold or no longer available"},
+        {"id": "personal_reasons", "label": "Personal or health reasons"},
+        {"id": "other", "label": "Other (Please describe)"},
+      ];
+    }
+
+    String selectedReasonId = reasons.first['id'];
+    final feedbackController = TextEditingController();
+    bool isDeleting = false;
+
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return SafeArea(
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              return Padding(
+                padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 20, right: 20, top: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 26),
+                        SizedBox(width: 10),
+                        Text(
+                          'Permanently Delete Account',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.error),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'This action is permanent and cannot be undone. All your profile data, KYC, and earnings history will be permanently deleted.',
+                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Please select a reason for leaving:',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 180,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: reasons.length,
+                        itemBuilder: (context, index) {
+                          final r = reasons[index];
+                          return RadioListTile<String>(
+                            title: Text(r['label'] ?? '', style: const TextStyle(fontSize: 13)),
+                            value: r['id'],
+                            groupValue: selectedReasonId,
+                            activeColor: AppColors.error,
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            onChanged: (val) {
+                              if (val != null) {
+                                setModalState(() {
+                                  selectedReasonId = val;
+                                });
+                              }
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: feedbackController,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: 'Additional feedback (Optional)',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        contentPadding: const EdgeInsets.all(12),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.error,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: isDeleting
+                            ? null
+                            : () async {
+                                setModalState(() {
+                                  isDeleting = true;
+                                });
+
+                                final response = await ref
+                                    .read(authProvider.notifier)
+                                    .deleteAccount(
+                                      reason: selectedReasonId,
+                                      feedback: feedbackController.text.trim().isNotEmpty ? feedbackController.text.trim() : null,
+                                    );
+
+                                if (!context.mounted) return;
+
+                                if (response.isSuccess) {
+                                  Navigator.pop(context); // close sheet
+                                  AppFlushbar.success(
+                                    context,
+                                    title: 'Account Deleted 🔴',
+                                    message: 'Your account has been permanently deleted.',
+                                  );
+                                  Navigator.pushAndRemoveUntil(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const PhoneLoginScreen()),
+                                    (route) => false,
+                                  );
+                                } else {
+                                  setModalState(() {
+                                    isDeleting = false;
+                                  });
+                                  Navigator.pop(context); // close sheet
+                                  AppFlushbar.error(
+                                    context,
+                                    title: 'Deletion Failed',
+                                    message: response.errorMessage ?? 'Could not delete account. Make sure you have no active rides.',
+                                  );
+                                }
+                              },
+                        child: isDeleting
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : const Text('CONFIRM PERMANENT DELETE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

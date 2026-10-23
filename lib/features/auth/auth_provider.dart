@@ -56,9 +56,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final ApiService _apiService;
   final Ref _ref;
 
-  AuthNotifier(this._ref, {ApiService? apiService})
-      : _apiService = apiService ?? ApiService(),
-        super(AuthState()) {
+  AuthNotifier(this._ref, {ApiService? apiService}) : _apiService = apiService ?? ApiService(), super(AuthState()) {
     loadSavedSession();
   }
 
@@ -90,12 +88,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           user = user.copyWith(isNewUser: isNewUser);
         }
 
-        state = state.copyWith(
-          status: AuthStatus.authenticated,
-          authToken: token,
-          user: user,
-          isSessionLoaded: true,
-        );
+        state = state.copyWith(status: AuthStatus.authenticated, authToken: token, user: user, isSessionLoaded: true);
 
         // Fetch fresh profile in background using 'data' key as requested
         fetchProfile();
@@ -103,10 +96,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
     } catch (_) {}
 
-    state = state.copyWith(
-      status: AuthStatus.unauthenticated,
-      isSessionLoaded: true,
-    );
+    state = state.copyWith(status: AuthStatus.unauthenticated, isSessionLoaded: true);
   }
 
   /// Fetches latest driver profile from server using /api/driver/profile,
@@ -116,10 +106,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     if (state.authToken == null || state.authToken!.isEmpty) return false;
 
     try {
-      final response = await _apiService.get(
-        ApiConstants.driverProfile,
-        token: state.authToken,
-      );
+      final response = await _apiService.get(ApiConstants.driverProfile, token: state.authToken);
 
       if (response.isSuccess && response.data != null) {
         final jsonResponse = response.data is String ? jsonDecode(response.data) : response.data;
@@ -172,23 +159,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<bool> sendOtp() async {
     if (state.phoneNumber.length < 10) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'Please enter a valid 10-digit mobile number',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: 'Please enter a valid 10-digit mobile number');
       return false;
     }
 
     state = state.copyWith(status: AuthStatus.loading, errorMessage: null);
 
-    final response = await _apiService.post(
-      ApiConstants.sendOtp,
-      data: {
-        'phone': state.phoneNumber,
-        'countryCode': '+91',
-        'role': 'driver',
-      },
-    );
+    final response = await _apiService.post(ApiConstants.sendOtp, data: {'phone': state.phoneNumber, 'countryCode': '+91', 'role': 'driver'});
 
     if (response.isSuccess) {
       try {
@@ -197,65 +174,41 @@ class AuthNotifier extends StateNotifier<AuthState> {
           state = state.copyWith(status: AuthStatus.otpSent);
           return true;
         } else {
-          state = state.copyWith(
-            status: AuthStatus.error,
-            errorMessage: authResponse.message,
-          );
+          state = state.copyWith(status: AuthStatus.error, errorMessage: authResponse.message);
           return false;
         }
       } catch (e) {
-        state = state.copyWith(
-          status: AuthStatus.error,
-          errorMessage: 'Invalid response format from server',
-        );
+        state = state.copyWith(status: AuthStatus.error, errorMessage: 'Invalid response format from server');
         return false;
       }
     } else {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: response.errorMessage ?? 'Failed to send OTP',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: response.errorMessage ?? 'Failed to send OTP');
       return false;
     }
   }
 
   Future<bool> resendOtp() async {
     if (state.phoneNumber.length < 10) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'Invalid phone number for resending OTP',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: 'Invalid phone number for resending OTP');
       return false;
     }
 
     state = state.copyWith(status: AuthStatus.loading, errorMessage: null);
 
-    final response = await _apiService.post(
-      ApiConstants.resendOtp,
-      data: {
-        'phone': state.phoneNumber,
-        'countryCode': '+91',
-      },
-    );
+    final response = await _apiService.post(ApiConstants.resendOtp, data: {'phone': state.phoneNumber, 'countryCode': '+91'});
 
     if (response.isSuccess) {
       state = state.copyWith(status: AuthStatus.otpSent);
       return true;
     } else {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: response.errorMessage ?? 'Failed to resend OTP',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: response.errorMessage ?? 'Failed to resend OTP');
       return false;
     }
   }
 
   Future<bool> verifyOtp() async {
     if (state.otp.length < 6) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'Please enter complete 6-digit OTP',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: 'Please enter complete 6-digit OTP');
       return false;
     }
 
@@ -290,48 +243,30 @@ class AuthNotifier extends StateNotifier<AuthState> {
             await prefs.setString('user_json', jsonEncode(user.toJson()));
           }
 
-          state = state.copyWith(
-            status: AuthStatus.authenticated,
-            authToken: token,
-            user: user,
-          );
+          state = state.copyWith(status: AuthStatus.authenticated, authToken: token, user: user);
 
           // Fetch complete profile (profile, driver, vehicle) after verification
           fetchProfile();
           return true;
         } else {
-          state = state.copyWith(
-            status: AuthStatus.error,
-            errorMessage: authResponse.message,
-          );
+          state = state.copyWith(status: AuthStatus.error, errorMessage: authResponse.message);
           return false;
         }
       } catch (e) {
-        state = state.copyWith(
-          status: AuthStatus.error,
-          errorMessage: 'Invalid verification response format',
-        );
+        state = state.copyWith(status: AuthStatus.error, errorMessage: 'Invalid verification response format');
         return false;
       }
     } else {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: response.errorMessage ?? 'Invalid OTP code',
-      );
+      state = state.copyWith(status: AuthStatus.error, errorMessage: response.errorMessage ?? 'Invalid OTP code');
       return false;
     }
   }
 
   /// Called after KYC and Vehicle registration complete to set isNewUser = false
   Future<void> markOnboardingComplete() async {
-    final updatedUser = state.user?.copyWith(isNewUser: false) ??
-        UserModel(
-          id: 'usr-id',
-          phone: state.phoneNumber,
-          fullName: null,
-          role: 'driver',
-          isNewUser: false,
-        );
+    final updatedUser =
+        state.user?.copyWith(isNewUser: false) ??
+        UserModel(id: 'usr-id', phone: state.phoneNumber, fullName: null, role: 'driver', isNewUser: false);
 
     state = state.copyWith(user: updatedUser);
 
@@ -379,6 +314,68 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
     state = AuthState(isSessionLoaded: true);
     return true;
+  }
+
+  /// Fetches deletion reasons from server (/api/driver/account/deletion-reasons)
+  Future<List<Map<String, dynamic>>> fetchDeletionReasons() async {
+    try {
+      final response = await _apiService.get(ApiConstants.deletionReasons, token: state.authToken);
+      if (response.isSuccess && response.data != null) {
+        final jsonResponse = response.data is String ? jsonDecode(response.data) : response.data;
+        if (jsonResponse is Map<String, dynamic>) {
+          final dataMap = jsonResponse['data'] ?? jsonResponse['result'] ?? jsonResponse;
+          if (dataMap is Map && dataMap['reasons'] is List) {
+            return (dataMap['reasons'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+          } else if (dataMap is List) {
+            return dataMap.map((e) => Map<String, dynamic>.from(e)).toList();
+          }
+        }
+      }
+    } catch (_) {}
+    return [
+      {"id": "low_earnings", "label": "Earnings are lower than expected"},
+      {"id": "switching_platform", "label": "Switching to another platform / company"},
+      {"id": "vehicle_issues", "label": "Vehicle sold or no longer available"},
+      {"id": "personal_reasons", "label": "Personal or health reasons"},
+      {"id": "other", "label": "Other (Please describe)"},
+    ];
+  }
+
+  /// Permanently deletes driver account (/api/driver/account)
+  Future<ApiResponse> deleteAccount({required String reason, String? reasonText, String? feedback}) async {
+    state = state.copyWith(status: AuthStatus.loading, errorMessage: null);
+
+    try {
+      final response = await _apiService.delete(
+        ApiConstants.deleteAccount,
+        data: {
+          'reason': reason,
+          if (reasonText != null && reasonText.isNotEmpty) 'reasonText': reasonText,
+          if (feedback != null && feedback.isNotEmpty) 'feedback': feedback,
+        },
+        token: state.authToken,
+      );
+
+      if (response.isSuccess) {
+        // Clear local session
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('auth_token');
+        await prefs.remove('is_new_user');
+        await prefs.remove('user_phone');
+        await prefs.remove('user_json');
+        await prefs.setBool('is_duty_online', false);
+
+        state = AuthState(isSessionLoaded: true);
+        return response;
+      } else {
+        state = state.copyWith(status: AuthStatus.authenticated, errorMessage: response.errorMessage ?? 'Failed to delete account.');
+        return response;
+      }
+    } catch (e) {
+      final err = 'An unexpected error occurred: $e';
+      state = state.copyWith(status: AuthStatus.authenticated, errorMessage: err);
+      return ApiResponse.failure(err);
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../wallet/wallet_provider.dart';
 import 'tabs/driver_earnings_tab.dart';
 import 'tabs/driver_map_home_tab.dart';
 import 'tabs/driver_profile_tab.dart';
@@ -10,37 +11,22 @@ class MainNavigationScreen extends ConsumerStatefulWidget {
   const MainNavigationScreen({super.key});
 
   @override
-  ConsumerState<MainNavigationScreen> createState() =>
-      _MainNavigationScreenState();
+  ConsumerState<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
 class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _tabs = const [
-    DriverMapHomeTab(),
-    DriverEarningsTab(),
-    DriverRidesTab(),
-    DriverProfileTab(),
-  ];
+  final List<Widget> _tabs = const [DriverMapHomeTab(), DriverEarningsTab(), DriverRidesTab(), DriverProfileTab()];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _tabs,
-      ),
+      body: IndexedStack(index: _currentIndex, children: _tabs),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
-          ],
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(0, -4))],
         ),
         child: NavigationBar(
           selectedIndex: _currentIndex,
@@ -52,6 +38,12 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
             setState(() {
               _currentIndex = index;
             });
+            if (index == 2) {
+              ref.read(rideHistoryRefreshTriggerProvider.notifier).state++;
+            } else if (index == 1) {
+              ref.read(walletProvider.notifier).fetchWalletEarnings();
+              ref.read(walletProvider.notifier).fetchPayouts();
+            }
           },
           destinations: const [
             NavigationDestination(
@@ -61,20 +53,17 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
             ),
             NavigationDestination(
               icon: Icon(Icons.account_balance_wallet_outlined),
-              selectedIcon: Icon(Icons.account_balance_wallet_rounded,
-                  color: AppColors.primary),
+              selectedIcon: Icon(Icons.account_balance_wallet_rounded, color: AppColors.primary),
               label: 'Earnings',
             ),
             NavigationDestination(
               icon: Icon(Icons.alt_route_outlined),
-              selectedIcon:
-                  Icon(Icons.alt_route_rounded, color: AppColors.primary),
+              selectedIcon: Icon(Icons.alt_route_rounded, color: AppColors.primary),
               label: 'Rides',
             ),
             NavigationDestination(
               icon: Icon(Icons.person_outline_rounded),
-              selectedIcon:
-                  Icon(Icons.person_rounded, color: AppColors.primary),
+              selectedIcon: Icon(Icons.person_rounded, color: AppColors.primary),
               label: 'Profile',
             ),
           ],
